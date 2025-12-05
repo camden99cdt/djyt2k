@@ -191,23 +191,31 @@ class YTDemucsApp:
             accelerator="Ctrl+N",
             command=self.create_new_window,
         )
-        file_menu.add_command(label="Close Window", command=self.close_window)
+        file_menu.add_command(
+            label="Close Window",
+            accelerator="Ctrl+W",
+            command=self.close_window,
+        )
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.exit_application)
 
         menubar.add_cascade(label="File", menu=file_menu)
         self.root.config(menu=menubar)
         self.root.bind("<Control-n>", self.on_new_window_shortcut)
+        self.root.bind("<Control-w>", self.on_close_window_shortcut)
 
     def on_new_window_shortcut(self, event=None):
         self.create_new_window()
+
+    def on_close_window_shortcut(self, event=None):
+        self.close_window()
 
     def create_new_window(self):
         master = self.root if isinstance(self.root, tk.Tk) else (self.root.master or self.root)
         new_root = tk.Toplevel(master)
         YTDemucsApp(new_root)
 
-    def close_window(self):
+    def close_window(self, event=None):
         self.destroy_window()
         if not YTDemucsApp.instances:
             try:
