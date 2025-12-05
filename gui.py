@@ -27,10 +27,15 @@ FLAT_TO_SHARP = {
 }
 
 class YTDemucsApp:
+    instances: list["YTDemucsApp"] = []
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.base_title = "YouTube \u2192 Demucs Stems"
         self.root.title(self.base_title)
+
+        self.root.protocol("WM_DELETE_WINDOW", self.close_window)
+        self.setup_menubar()
 
         # ---------- layout ----------
         container = ttk.Frame(root)
@@ -168,10 +173,68 @@ class YTDemucsApp:
         # periodic UI updates
         self.root.after(100, self.update_playback_ui)
 
+        YTDemucsApp.instances.append(self)
+
         # saved sessions UI wiring
         self.saved_sessions_listbox.bind("<<ListboxSelect>>", self.on_saved_session_select)
         self.refresh_saved_sessions_list()
         self.update_save_button_state()
+
+    # ---------- menu + window management ----------
+
+    def setup_menubar(self):
+        menubar = tk.Menu(self.root)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(
+            label="New Window",
+            accelerator="Ctrl+N",
+            command=self.create_new_window,
+        )
+        file_menu.add_command(label="Close Window", command=self.close_window)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.exit_application)
+
+        menubar.add_cascade(label="File", menu=file_menu)
+        self.root.config(menu=menubar)
+        self.root.bind("<Control-n>", self.on_new_window_shortcut)
+
+    def on_new_window_shortcut(self, event=None):
+        self.create_new_window()
+
+    def create_new_window(self):
+        master = self.root if isinstance(self.root, tk.Tk) else (self.root.master or self.root)
+        new_root = tk.Toplevel(master)
+        YTDemucsApp(new_root)
+
+    def close_window(self):
+        self.destroy_window()
+        if not YTDemucsApp.instances:
+            try:
+                self.root.quit()
+            except Exception:
+                pass
+
+    def destroy_window(self):
+        try:
+            self.player.stop()
+            self.player.stop_stream()
+        except Exception:
+            pass
+
+        if self in YTDemucsApp.instances:
+            YTDemucsApp.instances.remove(self)
+
+        if self.root.winfo_exists():
+            self.root.destroy()
+
+    def exit_application(self):
+        for instance in list(YTDemucsApp.instances):
+            instance.destroy_window()
+        try:
+            self.root.quit()
+        except Exception:
+            pass
 
     # ---------- logging / status ----------
 
