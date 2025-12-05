@@ -310,7 +310,7 @@ class AudioSession:
                     if progress_callback:
                         progress_callback(
                             completed / float(max(total_items, 1)),
-                            f"{name}, {tempo_rate:.2f}x",
+                            f"{name}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
                         )
                     new_stems[name] = self._apply_tempo_pitch(
                         data=orig,
@@ -325,7 +325,7 @@ class AudioSession:
                     if progress_callback:
                         progress_callback(
                             completed / float(max(total_items, 1)),
-                            f"mix, {tempo_rate:.2f}x",
+                            f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
                         )
                     new_mix = self._apply_tempo_pitch(
                         data=self.original_mix,

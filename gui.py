@@ -390,6 +390,13 @@ class YTDemucsApp:
         pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
 
         # rendering progress (bottom of player area)
+        ttk.Separator(self.player_frame, orient="horizontal").grid(
+            row=6,
+            column=0,
+            columnspan=max(5, len(stem_names) + 1),
+            sticky="ew",
+            pady=(10, 5),
+        )
         self.render_progress_var = tk.DoubleVar(value=0.0)
         self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
         self.render_progress_bar = ttk.Progressbar(
@@ -399,22 +406,22 @@ class YTDemucsApp:
             mode="determinate",
         )
         self.render_progress_bar.grid(
-            row=6,
+            row=7,
             column=0,
             columnspan=4,
             sticky="ew",
-            pady=(10, 0),
+            pady=(5, 0),
         )
         self.render_progress_label = ttk.Label(
             self.player_frame,
             textvariable=self.render_progress_label_var,
         )
         self.render_progress_label.grid(
-            row=6,
+            row=7,
             column=4,
             columnspan=max(1, len(stem_names) - 3),
             sticky="w",
-            pady=(10, 0),
+            pady=(5, 0),
         )
 
         # initial waveform
