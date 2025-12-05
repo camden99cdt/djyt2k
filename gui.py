@@ -1,8 +1,6 @@
 # gui.py
 import os
-import uuid
 import threading
-from datetime import datetime
 from io import BytesIO
 import urllib.request
 
@@ -11,10 +9,9 @@ from tkinter import ttk, messagebox
 
 from PIL import Image, ImageTk
 
-import downloader
-import demucs_runner
 from audio_player import StemAudioPlayer
-from key_detection import detect_key_string
+from pipeline import PipelineResult, PipelineRunner
+from saved_sessions import SavedSession, SavedSessionStore
 
 CHROMA_LABELS = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -36,8 +33,14 @@ class YTDemucsApp:
         self.root.title(self.base_title)
 
         # ---------- layout ----------
-        main_frame = ttk.Frame(root, padding=10)
-        main_frame.grid(row=0, column=0, sticky="nsew")
+        container = ttk.Frame(root)
+        container.grid(row=0, column=0, sticky="nsew")
+
+        self.sidebar_frame = ttk.Frame(container, padding=(10, 10))
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsw")
+
+        main_frame = ttk.Frame(container, padding=10)
+        main_frame.grid(row=0, column=1, sticky="nsew")
 
         self.thumbnail_label = tk.Label(
             main_frame,
@@ -82,15 +85,47 @@ class YTDemucsApp:
         self.player_frame = ttk.Frame(main_frame)
         self.player_frame.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(10, 0))
 
+        # Sidebar with saved sessions
+        ttk.Label(self.sidebar_frame, text="Saved Sessions").grid(row=0, column=0, sticky="w")
+        self.saved_sessions_listbox = tk.Listbox(
+            self.sidebar_frame,
+            height=20,
+            exportselection=False,
+        )
+        saved_scrollbar = ttk.Scrollbar(
+            self.sidebar_frame, orient="vertical", command=self.saved_sessions_listbox.yview
+        )
+        self.saved_sessions_listbox.configure(yscrollcommand=saved_scrollbar.set)
+        self.saved_sessions_listbox.grid(row=1, column=0, sticky="nsew")
+        saved_scrollbar.grid(row=1, column=1, sticky="ns")
+
+        self.save_delete_button = ttk.Button(
+            self.sidebar_frame,
+            text="Save Session",
+            command=self.on_save_or_delete,
+            state="disabled",
+        )
+        self.save_delete_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+        self.sidebar_frame.rowconfigure(1, weight=1)
+        self.sidebar_frame.columnconfigure(0, weight=1)
+
         root.rowconfigure(0, weight=1)
         root.columnconfigure(0, weight=1)
+        container.columnconfigure(1, weight=1)
+        container.rowconfigure(0, weight=1)
         main_frame.rowconfigure(4, weight=1)
         for c in range(4):
             main_frame.columnconfigure(c, weight=0)
         main_frame.columnconfigure(1, weight=1)
 
         # ---------- GUI state ----------
+        self.saved_session_store = SavedSessionStore()
+        self.selected_saved_session_id: str | None = None
+        self.displayed_sessions: list = []
+        self.current_pipeline_result: PipelineResult | None = None
         self.thumbnail_image = None
+        self.current_thumbnail_bytes: bytes | None = None
 
         self.wave_canvas: tk.Canvas | None = None
         self.wave_cursor_id: int | None = None
@@ -104,6 +139,10 @@ class YTDemucsApp:
         self.pitch_var: tk.DoubleVar | None = None
         self.pitch_label: ttk.Label | None = None
         self.all_var: tk.BooleanVar | None = None
+        self.render_progress_var: tk.DoubleVar | None = None
+        self.render_progress_label_var: tk.StringVar | None = None
+        self.render_progress_bar: ttk.Progressbar | None = None
+        self.render_progress_label: ttk.Label | None = None
 
         self.waveform_points: list[float] = []
         self.waveform_duration: float = 0.0
@@ -117,9 +156,22 @@ class YTDemucsApp:
         self.player = StemAudioPlayer()
         if not self.player.audio_ok:
             self.append_log(f"Audio engine not available: {self.player.error_message}")
+        else:
+            self.player.set_render_progress_callback(self.on_render_progress)
+
+        # pipeline orchestration
+        self.pipeline_runner = PipelineRunner(
+            log_callback=self.append_log,
+            status_callback=self.set_status,
+        )
 
         # periodic UI updates
         self.root.after(100, self.update_playback_ui)
+
+        # saved sessions UI wiring
+        self.saved_sessions_listbox.bind("<<ListboxSelect>>", self.on_saved_session_select)
+        self.refresh_saved_sessions_list()
+        self.update_save_button_state()
 
     # ---------- logging / status ----------
 
@@ -157,19 +209,40 @@ class YTDemucsApp:
                 )
                 with urllib.request.urlopen(req) as resp:
                     data = resp.read()
-                image = Image.open(BytesIO(data))
-                image.thumbnail((240, 240))
-                photo = ImageTk.PhotoImage(image)
+                self.current_thumbnail_bytes = data
+                self.set_thumbnail_from_bytes(data)
             except Exception as e:
                 self.append_log(f"Could not load thumbnail: {e}")
                 return
 
-            def _set():
-                self.thumbnail_image = photo
-                self.thumbnail_label.configure(image=photo, text="")
-            self.root.after(0, _set)
-
         threading.Thread(target=worker, daemon=True).start()
+
+    def set_thumbnail_from_bytes(self, data: bytes):
+        try:
+            image = Image.open(BytesIO(data))
+            image.thumbnail((240, 240))
+            photo = ImageTk.PhotoImage(image)
+        except Exception as e:
+            self.append_log(f"Could not process thumbnail: {e}")
+            return
+
+        def _set():
+            self.thumbnail_image = photo
+            self.thumbnail_label.configure(image=photo, text="")
+        self.root.after(0, _set)
+
+    def set_thumbnail_from_file(self, path: str):
+        if not path or not os.path.exists(path):
+            self.append_log("Thumbnail not found on disk.")
+            return
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            self.current_thumbnail_bytes = data
+        except Exception as e:
+            self.append_log(f"Failed to read thumbnail: {e}")
+            return
+        self.set_thumbnail_from_bytes(self.current_thumbnail_bytes)
 
     # ---------- main button ----------
 
@@ -185,63 +258,138 @@ class YTDemucsApp:
 
     def run_pipeline(self, url: str):
         self.set_running(True)
-        self.set_status("Working...")
-        self.append_log(f"Starting process for URL: {url}")
-
         try:
-            info = downloader.get_video_info(url, log_callback=self.append_log)
-            title = info.get("title", "Unknown title")
-            self.current_title = title
-            thumb_url = info.get("thumbnail_url")
-            self.append_log(f"Video title: {title}")
-            if thumb_url:
-                self.update_thumbnail(thumb_url)
-
-            session_dir = self.create_unique_cache_dir()
-            self.append_log(f"Using cache directory: {session_dir}")
-
-            audio_path = downloader.download_audio(
-                url, session_dir, log_callback=self.append_log
+            result = self.pipeline_runner.process(
+                url, skip_separation=self.skip_sep_var.get()
             )
-            self.full_mix_path = audio_path
-            self.append_log(f"Downloaded audio to: {audio_path}")
-
-            self.song_key_text = detect_key_string(audio_path, log_callback=self.append_log)
-
-            skip_sep = self.skip_sep_var.get()
-            if skip_sep:
-                self.append_log("Skipping Demucs separation (user selected).")
-                stems_dir: str | None = None
-            else:
-                stems_dir = demucs_runner.run_demucs(
-                    audio_path, session_dir, log_callback=self.append_log
-                )
-                self.append_log("Demucs separation complete.")
-                self.append_log(f"Separated stems folder: {stems_dir}")
-
-            # update window title based on separation state
-            window_title = title if skip_sep else f"{title} [sep]"
-            self.root.after(0, lambda t=window_title: self.root.title(t))
-
-            self.set_status("Done")
-            self.root.after(0, lambda: self.setup_player(stems_dir))
-
+            self.handle_pipeline_success(result)
         except Exception as e:
             self.append_log(f"ERROR: {e}")
             self.set_status("Error")
         finally:
             self.set_running(False)
 
-    def create_unique_cache_dir(self) -> str:
-        home = os.path.expanduser("~")
-        base_cache = os.path.join(home, ".cache", "yt_demucs")
-        os.makedirs(base_cache, exist_ok=True)
+    def handle_pipeline_success(self, result: PipelineResult):
+        self.full_mix_path = result.audio_path
+        self.current_title = result.title
+        self.song_key_text = result.song_key_text
+        self.current_pipeline_result = result
+        self.selected_saved_session_id = None
+        self.saved_sessions_listbox.selection_clear(0, tk.END)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = uuid.uuid4().hex[:8]
-        session_dir = os.path.join(base_cache, f"session_{timestamp}_{unique_id}")
-        os.makedirs(session_dir, exist_ok=True)
-        return session_dir
+        if result.thumbnail_url:
+            self.update_thumbnail(result.thumbnail_url)
+
+        window_title = result.title if not result.separated else f"{result.title} [sep]"
+        self.root.after(0, lambda t=window_title: self.root.title(t))
+        self.root.after(0, lambda: self.setup_player(result.stems_dir))
+        self.update_save_button_state()
+
+    # ---------- saved sessions ----------
+
+    def refresh_saved_sessions_list(self):
+        self.saved_sessions_listbox.delete(0, tk.END)
+        self.displayed_sessions = self.saved_session_store.list_sessions()
+        for session in self.displayed_sessions:
+            self.saved_sessions_listbox.insert(tk.END, session.display_name)
+
+        if self.selected_saved_session_id:
+            for idx, session in enumerate(self.displayed_sessions):
+                if session.session_id == self.selected_saved_session_id:
+                    self.saved_sessions_listbox.selection_set(idx)
+                    self.saved_sessions_listbox.see(idx)
+                    break
+
+    def update_save_button_state(self):
+        if self.selected_saved_session_id:
+            self.save_delete_button.config(text="Delete Session", state="normal")
+        elif self.current_pipeline_result and self.current_pipeline_result.stems_dir:
+            self.save_delete_button.config(text="Save Session", state="normal")
+        else:
+            self.save_delete_button.config(text="Save Session", state="disabled")
+
+    def on_saved_session_select(self, event):
+        selection = self.saved_sessions_listbox.curselection()
+        if not selection:
+            self.selected_saved_session_id = None
+            self.update_save_button_state()
+            return
+
+        idx = selection[0]
+        if idx >= len(self.displayed_sessions):
+            return
+
+        session = self.displayed_sessions[idx]
+        self.selected_saved_session_id = session.session_id
+        self.update_save_button_state()
+        self.load_saved_session(session)
+
+    def on_save_or_delete(self):
+        if self.selected_saved_session_id:
+            self.delete_selected_session()
+        else:
+            self.save_current_session()
+
+    def save_current_session(self):
+        result = self.current_pipeline_result
+        if not result or not result.stems_dir:
+            messagebox.showinfo("Save Session", "A separated session is required to save.")
+            return
+
+        def worker():
+            try:
+                session = self.saved_session_store.add_session(
+                    title=self.current_title or "Untitled",
+                    song_key_text=self.song_key_text,
+                    session_dir=result.session_dir,
+                    audio_path=result.audio_path,
+                    stems_dir=result.stems_dir,
+                    thumbnail_bytes=self.current_thumbnail_bytes,
+                )
+                self.append_log(f"Saved session: {session.display_name}")
+            except Exception as e:
+                self.append_log(f"Failed to save session: {e}")
+                return
+
+            def _after_save():
+                self.current_pipeline_result = None
+                self.selected_saved_session_id = session.session_id
+                self.refresh_saved_sessions_list()
+                self.update_save_button_state()
+            self.root.after(0, _after_save)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def delete_selected_session(self):
+        session = self.saved_session_store.get_session(self.selected_saved_session_id)
+        if not session:
+            return
+
+        if not self.saved_session_store.delete_session(session.session_id):
+            return
+
+        self.append_log(f"Deleted session: {session.display_name}")
+        self.selected_saved_session_id = None
+        self.refresh_saved_sessions_list()
+        self.update_save_button_state()
+
+    def load_saved_session(self, session: SavedSession):
+        self.append_log(f"Loading saved session: {session.display_name}")
+        self.clear_current_session()
+        self.full_mix_path = session.audio_path
+        self.current_title = session.title
+        self.song_key_text = session.song_key_text
+        self.current_pipeline_result = None
+
+        if session.thumbnail_path:
+            self.set_thumbnail_from_file(session.thumbnail_path)
+        else:
+            self.thumbnail_label.configure(image="", text="No\nthumbnail")
+
+        window_title = session.title
+        self.root.after(0, lambda t=window_title: self.root.title(t))
+        self.root.after(0, lambda: self.setup_player(session.stems_dir))
+        self.update_save_button_state()
 
     # ---------- player UI ----------
 
@@ -269,6 +417,10 @@ class YTDemucsApp:
         self.pitch_var = None
         self.pitch_label = None
         self.all_var = None
+        self.render_progress_var = None
+        self.render_progress_label_var = None
+        self.render_progress_bar = None
+        self.render_progress_label = None
         self.waveform_points = []
         self.waveform_duration = 0.0
         self.stem_vars.clear()
@@ -306,26 +458,34 @@ class YTDemucsApp:
         self.wave_canvas.bind("<Button-1>", self.on_waveform_click)
 
         # stem checkboxes (only if we actually have stems)
+        stems_frame = ttk.Frame(self.player_frame)
+        stems_frame.grid(
+            row=1,
+            column=0,
+            columnspan=max(6, len(stem_names) + 2),
+            sticky="w",
+        )
+
         for idx, stem_name in enumerate(stem_names):
             var = tk.BooleanVar(value=True)
             cb = ttk.Checkbutton(
-                self.player_frame,
+                stems_frame,
                 text=stem_name,
                 variable=var,
                 command=self.on_stem_toggle,
             )
-            cb.grid(row=1, column=idx, sticky="w", padx=(0, 5))
+            cb.grid(row=0, column=idx + 1, sticky="w", padx=(0, 5))
             self.stem_vars[stem_name] = var
 
         # "All" checkbox (full mix)
         self.all_var = tk.BooleanVar(value=(stems_dir is None))
         cb_all = ttk.Checkbutton(
-            self.player_frame,
+            stems_frame,
             text="All",
             variable=self.all_var,
             command=self.on_all_toggle,
         )
-        cb_all.grid(row=1, column=len(stem_names), sticky="w", padx=(10, 0))
+        cb_all.grid(row=0, column=0, sticky="w", padx=(0, 10))
 
         # If no stems at all (skip separation), force All mode in player
         if not stem_names:
@@ -412,6 +572,43 @@ class YTDemucsApp:
         )
         pitch_slider.grid(row=5, column=1, columnspan=4, sticky="ew", pady=(5, 0))
         pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
+
+        # rendering progress (bottom of player area)
+        ttk.Separator(self.player_frame, orient="horizontal").grid(
+            row=6,
+            column=0,
+            columnspan=max(5, len(stem_names) + 1),
+            sticky="ew",
+            pady=(10, 5),
+        )
+        self.render_progress_var = tk.DoubleVar(value=0.0)
+        self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
+        self.render_progress_bar = ttk.Progressbar(
+            self.player_frame,
+            variable=self.render_progress_var,
+            maximum=100,
+            mode="determinate",
+        )
+        self.render_progress_bar.grid(
+            row=7,
+            column=0,
+            columnspan=4,
+            sticky="ew",
+            pady=(5, 0),
+        )
+        self.render_progress_label = ttk.Label(
+            self.player_frame,
+            textvariable=self.render_progress_label_var,
+            # Fixed width prevents layout shifts when the status text changes.
+            width=28,
+        )
+        self.render_progress_label.grid(
+            row=7,
+            column=4,
+            columnspan=max(1, len(stem_names) - 3),
+            sticky="w",
+            pady=(5, 0),
+        )
 
         # initial waveform
         self.update_waveform_from_selection()
@@ -548,6 +745,51 @@ class YTDemucsApp:
 
     # ---------- RESET & CLEAR ----------
 
+    def clear_current_session(self):
+        try:
+            self.player.stop()
+            self.player.stop_stream()
+        except Exception:
+            pass
+
+        self.player = StemAudioPlayer()
+        if not self.player.audio_ok:
+            self.append_log(f"Audio engine not available: {self.player.error_message}")
+        else:
+            self.player.set_render_progress_callback(self.on_render_progress)
+
+        for w in self.player_frame.winfo_children():
+            w.destroy()
+
+        self.wave_canvas = None
+        self.wave_cursor_id = None
+        self.time_label = None
+        self.play_pause_button = None
+        self.stop_button = None
+        self.volume_var = None
+        self.volume_label = None
+        self.speed_var = None
+        self.speed_label = None
+        self.pitch_var = None
+        self.pitch_label = None
+        self.all_var = None
+        self.render_progress_var = None
+        self.render_progress_label_var = None
+        self.render_progress_bar = None
+        self.render_progress_label = None
+        self.waveform_points = []
+        self.waveform_duration = 0.0
+        self.stem_vars.clear()
+        self.full_mix_path = None
+        self.current_title = None
+        self.song_key_text = None
+        self.current_pipeline_result = None
+        self.current_thumbnail_bytes = None
+
+        self.thumbnail_image = None
+        self.thumbnail_label.configure(image="", text="No\nthumbnail")
+        self.update_save_button_state()
+
     def on_reset_playback(self):
         """
         Reset speed to 1x, pitch to +0.0 st, volume to 100%.
@@ -587,44 +829,7 @@ class YTDemucsApp:
           - clear URL, log, thumbnail
           - reset skip separation, status, window title
         """
-        # stop audio + stream
-        try:
-            self.player.stop()
-            self.player.stop_stream()
-        except Exception:
-            pass
-
-        # fresh player instance
-        self.player = StemAudioPlayer()
-        if not self.player.audio_ok:
-            self.append_log(f"Audio engine not available: {self.player.error_message}")
-
-        # clear playback UI
-        for w in self.player_frame.winfo_children():
-            w.destroy()
-
-        self.wave_canvas = None
-        self.wave_cursor_id = None
-        self.time_label = None
-        self.play_pause_button = None
-        self.stop_button = None
-        self.volume_var = None
-        self.volume_label = None
-        self.speed_var = None
-        self.speed_label = None
-        self.pitch_var = None
-        self.pitch_label = None
-        self.all_var = None
-        self.waveform_points = []
-        self.waveform_duration = 0.0
-        self.stem_vars.clear()
-        self.full_mix_path = None
-        self.current_title = None
-        self.song_key_text = None
-
-        # clear thumbnail
-        self.thumbnail_image = None
-        self.thumbnail_label.configure(image="", text="No\nthumbnail")
+        self.clear_current_session()
 
         # clear URL
         self.url_var.set("")
@@ -638,18 +843,14 @@ class YTDemucsApp:
         self.skip_sep_var.set(False)
         self.status_var.set("Idle")
 
+        self.saved_sessions_listbox.selection_clear(0, tk.END)
+        self.selected_saved_session_id = None
+        self.update_save_button_state()
+
         # reset window title
         self.root.title(self.base_title)
 
     # ---------- volume / speed / pitch / stems / "All" ----------
-
-    def on_volume_change(self, value: str):
-        try:
-            v = float(value)
-        except ValueError:
-            v = 1.0
-        self.player.set_master_volume(v)
-
     @staticmethod
     def snap_speed(v: float) -> float:
         preferred = [0.5, 0.75, 1.0, 1.25, 1.5]
@@ -762,6 +963,28 @@ class YTDemucsApp:
             self.volume_label.config(text=f"Volume: {pct}%")
 
 
+    # ---------- render progress ----------
+
+    def on_render_progress(self, progress: float, label: str):
+        def _update():
+            if (
+                self.render_progress_var is None
+                or self.render_progress_label_var is None
+            ):
+                return
+
+            try:
+                pct = max(0.0, min(float(progress), 1.0)) * 100.0
+            except (TypeError, ValueError):
+                pct = 0.0
+            self.render_progress_var.set(pct)
+
+            text = label.strip() if label else "Ready"
+            self.render_progress_label_var.set(f"Rendering: {text}")
+
+        self.root.after(0, _update)
+
+
     # ---------- periodic UI ----------
 
     def update_playback_ui(self):
@@ -820,7 +1043,7 @@ class YTDemucsApp:
         try:
             base_index = CHROMA_LABELS.index(tonic)
         except ValueError:
-                return f"{pitch_part} | Key: {base_key}"
+            return f"{pitch_part} | Key: {base_key}"
 
         # THE IMPORTANT FIX:
         # semitones slider value *is* the number of semitone key steps.
