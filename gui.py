@@ -1,8 +1,5 @@
 # gui.py
-import os
-import uuid
 import threading
-from datetime import datetime
 from io import BytesIO
 import urllib.request
 
@@ -11,10 +8,8 @@ from tkinter import ttk, messagebox
 
 from PIL import Image, ImageTk
 
-import downloader
-import demucs_runner
 from audio_player import StemAudioPlayer
-from key_detection import detect_key_string
+from pipeline import PipelineResult, PipelineRunner
 
 CHROMA_LABELS = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -118,6 +113,12 @@ class YTDemucsApp:
         if not self.player.audio_ok:
             self.append_log(f"Audio engine not available: {self.player.error_message}")
 
+        # pipeline orchestration
+        self.pipeline_runner = PipelineRunner(
+            log_callback=self.append_log,
+            status_callback=self.set_status,
+        )
+
         # periodic UI updates
         self.root.after(100, self.update_playback_ui)
 
@@ -185,63 +186,28 @@ class YTDemucsApp:
 
     def run_pipeline(self, url: str):
         self.set_running(True)
-        self.set_status("Working...")
-        self.append_log(f"Starting process for URL: {url}")
-
         try:
-            info = downloader.get_video_info(url, log_callback=self.append_log)
-            title = info.get("title", "Unknown title")
-            self.current_title = title
-            thumb_url = info.get("thumbnail_url")
-            self.append_log(f"Video title: {title}")
-            if thumb_url:
-                self.update_thumbnail(thumb_url)
-
-            session_dir = self.create_unique_cache_dir()
-            self.append_log(f"Using cache directory: {session_dir}")
-
-            audio_path = downloader.download_audio(
-                url, session_dir, log_callback=self.append_log
+            result = self.pipeline_runner.process(
+                url, skip_separation=self.skip_sep_var.get()
             )
-            self.full_mix_path = audio_path
-            self.append_log(f"Downloaded audio to: {audio_path}")
-
-            self.song_key_text = detect_key_string(audio_path, log_callback=self.append_log)
-
-            skip_sep = self.skip_sep_var.get()
-            if skip_sep:
-                self.append_log("Skipping Demucs separation (user selected).")
-                stems_dir: str | None = None
-            else:
-                stems_dir = demucs_runner.run_demucs(
-                    audio_path, session_dir, log_callback=self.append_log
-                )
-                self.append_log("Demucs separation complete.")
-                self.append_log(f"Separated stems folder: {stems_dir}")
-
-            # update window title based on separation state
-            window_title = title if skip_sep else f"{title} [sep]"
-            self.root.after(0, lambda t=window_title: self.root.title(t))
-
-            self.set_status("Done")
-            self.root.after(0, lambda: self.setup_player(stems_dir))
-
+            self.handle_pipeline_success(result)
         except Exception as e:
             self.append_log(f"ERROR: {e}")
             self.set_status("Error")
         finally:
             self.set_running(False)
 
-    def create_unique_cache_dir(self) -> str:
-        home = os.path.expanduser("~")
-        base_cache = os.path.join(home, ".cache", "yt_demucs")
-        os.makedirs(base_cache, exist_ok=True)
+    def handle_pipeline_success(self, result: PipelineResult):
+        self.full_mix_path = result.audio_path
+        self.current_title = result.title
+        self.song_key_text = result.song_key_text
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = uuid.uuid4().hex[:8]
-        session_dir = os.path.join(base_cache, f"session_{timestamp}_{unique_id}")
-        os.makedirs(session_dir, exist_ok=True)
-        return session_dir
+        if result.thumbnail_url:
+            self.update_thumbnail(result.thumbnail_url)
+
+        window_title = result.title if not result.separated else f"{result.title} [sep]"
+        self.root.after(0, lambda t=window_title: self.root.title(t))
+        self.root.after(0, lambda: self.setup_player(result.stems_dir))
 
     # ---------- player UI ----------
 
@@ -642,14 +608,6 @@ class YTDemucsApp:
         self.root.title(self.base_title)
 
     # ---------- volume / speed / pitch / stems / "All" ----------
-
-    def on_volume_change(self, value: str):
-        try:
-            v = float(value)
-        except ValueError:
-            v = 1.0
-        self.player.set_master_volume(v)
-
     @staticmethod
     def snap_speed(v: float) -> float:
         preferred = [0.5, 0.75, 1.0, 1.25, 1.5]
@@ -820,7 +778,7 @@ class YTDemucsApp:
         try:
             base_index = CHROMA_LABELS.index(tonic)
         except ValueError:
-                return f"{pitch_part} | Key: {base_key}"
+            return f"{pitch_part} | Key: {base_key}"
 
         # THE IMPORTANT FIX:
         # semitones slider value *is* the number of semitone key steps.
