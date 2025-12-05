@@ -1,5 +1,9 @@
 # gui.py
+import json
+import os
+import shutil
 import threading
+from dataclasses import dataclass, asdict
 from io import BytesIO
 import urllib.request
 
@@ -24,16 +28,61 @@ FLAT_TO_SHARP = {
     "Bb": "A#",
 }
 
+
+@dataclass
+class SavedSession:
+    title: str
+    session_dir: str
+    audio_path: str
+    stems_dir: str | None
+    thumbnail_path: str | None
+    song_key_text: str | None
+
 class YTDemucsApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.base_title = "YouTube \u2192 Demucs Stems"
         self.root.title(self.base_title)
+        self.saved_sessions: list[SavedSession] = []
+        self.saved_sessions_file = os.path.join(
+            os.path.expanduser("~"), ".djyt", "sessions.json"
+        )
 
         # ---------- layout ----------
-        main_frame = ttk.Frame(root, padding=10)
-        main_frame.grid(row=0, column=0, sticky="nsew")
+        shell = ttk.Frame(root)
+        shell.grid(row=0, column=0, sticky="nsew")
 
+        sidebar_frame = ttk.Frame(shell, padding=(10, 10))
+        sidebar_frame.grid(row=0, column=0, sticky="ns")
+
+        main_frame = ttk.Frame(shell, padding=10)
+        main_frame.grid(row=0, column=1, sticky="nsew")
+
+        # Sidebar content
+        ttk.Label(sidebar_frame, text="Saved Sessions").grid(row=0, column=0, sticky="w")
+        self.saved_listbox = tk.Listbox(
+            sidebar_frame,
+            height=20,
+            exportselection=False,
+            selectmode="browse",
+        )
+        self.saved_listbox.grid(row=1, column=0, sticky="nsew")
+        saved_scroll = ttk.Scrollbar(
+            sidebar_frame, orient="vertical", command=self.saved_listbox.yview
+        )
+        saved_scroll.grid(row=1, column=1, sticky="ns")
+        self.saved_listbox.configure(yscrollcommand=saved_scroll.set)
+        self.saved_listbox.bind("<<ListboxSelect>>", self.on_saved_select)
+
+        self.sidebar_button = ttk.Button(
+            sidebar_frame, text="Save Session", command=self.on_save_session, state="disabled"
+        )
+        self.sidebar_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+        sidebar_frame.rowconfigure(1, weight=1)
+        sidebar_frame.columnconfigure(0, weight=1)
+
+        # Main content
         self.thumbnail_label = tk.Label(
             main_frame,
             text="No\nthumbnail",
@@ -79,6 +128,8 @@ class YTDemucsApp:
 
         root.rowconfigure(0, weight=1)
         root.columnconfigure(0, weight=1)
+        shell.rowconfigure(0, weight=1)
+        shell.columnconfigure(1, weight=1)
         main_frame.rowconfigure(4, weight=1)
         for c in range(4):
             main_frame.columnconfigure(c, weight=0)
@@ -105,8 +156,12 @@ class YTDemucsApp:
         self.stem_vars: dict[str, tk.BooleanVar] = {}
 
         self.full_mix_path: str | None = None  # path to original yt-dlp wav
+        self.current_session_dir: str | None = None
+        self.current_stems_dir: str | None = None
         self.current_title: str | None = None
         self.song_key_text: str | None = None  # detected key, e.g. "F major"
+        self.current_thumbnail_url: str | None = None
+        self.current_thumbnail_path: str | None = None
 
         # audio engine
         self.player = StemAudioPlayer()
@@ -119,8 +174,200 @@ class YTDemucsApp:
             status_callback=self.set_status,
         )
 
+        self.load_saved_sessions()
+        self.refresh_saved_sessions_ui()
+
         # periodic UI updates
         self.root.after(100, self.update_playback_ui)
+
+    # ---------- saved sessions ----------
+
+    def load_saved_sessions(self):
+        os.makedirs(os.path.dirname(self.saved_sessions_file), exist_ok=True)
+        if not os.path.exists(self.saved_sessions_file):
+            self.saved_sessions = []
+            return
+
+        try:
+            with open(self.saved_sessions_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            sessions = []
+            for item in data.get("sessions", []):
+                sessions.append(
+                    SavedSession(
+                        title=item.get("title", "Unknown"),
+                        session_dir=item.get("session_dir", ""),
+                        audio_path=item.get("audio_path", ""),
+                        stems_dir=item.get("stems_dir"),
+                        thumbnail_path=item.get("thumbnail_path"),
+                        song_key_text=item.get("song_key_text"),
+                    )
+                )
+            self.saved_sessions = [s for s in sessions if os.path.exists(s.audio_path)]
+        except Exception as exc:
+            self.saved_sessions = []
+            self.append_log(f"Failed to load saved sessions: {exc}")
+
+    def persist_saved_sessions(self):
+        try:
+            payload = {"sessions": [asdict(s) for s in self.saved_sessions]}
+            with open(self.saved_sessions_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as exc:
+            self.append_log(f"Failed to persist saved sessions: {exc}")
+
+    def refresh_saved_sessions_ui(self):
+        self.saved_listbox.delete(0, tk.END)
+        for sess in self.saved_sessions:
+            self.saved_listbox.insert(tk.END, sess.title)
+        self.update_sidebar_button_state()
+
+    def update_sidebar_button_state(self):
+        selection = self.saved_listbox.curselection()
+        if selection:
+            self.sidebar_button.config(
+                text="Delete Session", state="normal", command=self.on_delete_saved
+            )
+            return
+
+        can_save = (
+            self.current_stems_dir is not None
+            and self.current_session_dir is not None
+            and self.find_saved_by_dir(self.current_session_dir) is None
+        )
+        if can_save:
+            self.sidebar_button.config(
+                text="Save Session", state="normal", command=self.on_save_session
+            )
+        else:
+            self.sidebar_button.config(text="Save Session", state="disabled")
+
+    def find_saved_by_dir(self, session_dir: str | None) -> SavedSession | None:
+        if not session_dir:
+            return None
+        for sess in self.saved_sessions:
+            if sess.session_dir == session_dir:
+                return sess
+        return None
+
+    def on_saved_select(self, event):
+        selection = self.saved_listbox.curselection()
+        if not selection:
+            self.update_sidebar_button_state()
+            return
+        index = selection[0]
+        if index < 0 or index >= len(self.saved_sessions):
+            return
+
+        saved = self.saved_sessions[index]
+        self.load_saved_session(saved)
+        self.update_sidebar_button_state()
+
+    def on_save_session(self):
+        if self.current_stems_dir is None or self.current_session_dir is None:
+            messagebox.showerror("Error", "No separated stems to save.")
+            return
+        if self.full_mix_path is None:
+            messagebox.showerror("Error", "No audio available to save.")
+            return
+
+        base_dir = os.path.join(os.path.expanduser("~"), ".djyt")
+        os.makedirs(base_dir, exist_ok=True)
+
+        dest_dir = os.path.join(base_dir, os.path.basename(self.current_session_dir.rstrip(os.sep)))
+        suffix = 1
+        while os.path.exists(dest_dir):
+            dest_dir = os.path.join(base_dir, f"{os.path.basename(self.current_session_dir)}_{suffix}")
+            suffix += 1
+
+        try:
+            shutil.move(self.current_session_dir, dest_dir)
+        except Exception as exc:
+            messagebox.showerror("Error", f"Failed to move session to {dest_dir}: {exc}")
+            return
+
+        audio_path = os.path.join(dest_dir, os.path.basename(self.full_mix_path or ""))
+        stems_dir = (
+            os.path.join(dest_dir, os.path.basename(self.current_stems_dir))
+            if self.current_stems_dir
+            else None
+        )
+
+        thumb_path = None
+        if self.current_thumbnail_url:
+            try:
+                req = urllib.request.Request(
+                    self.current_thumbnail_url, headers={"User-Agent": "Mozilla/5.0"}
+                )
+                with urllib.request.urlopen(req) as resp:
+                    data = resp.read()
+                thumb_path = os.path.join(dest_dir, "thumbnail.jpg")
+                with open(thumb_path, "wb") as f:
+                    f.write(data)
+            except Exception as exc:
+                self.append_log(f"Could not save thumbnail: {exc}")
+
+        saved = SavedSession(
+            title=self.current_title or "Unknown",
+            session_dir=dest_dir,
+            audio_path=audio_path,
+            stems_dir=stems_dir,
+            thumbnail_path=thumb_path,
+            song_key_text=self.song_key_text,
+        )
+        self.saved_sessions.append(saved)
+        self.persist_saved_sessions()
+        self.refresh_saved_sessions_ui()
+        self.current_session_dir = dest_dir
+        self.current_stems_dir = stems_dir
+        self.full_mix_path = audio_path
+        self.current_thumbnail_path = thumb_path
+        messagebox.showinfo("Saved", "Session saved for later use.")
+
+    def on_delete_saved(self):
+        selection = self.saved_listbox.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        if index < 0 or index >= len(self.saved_sessions):
+            return
+
+        saved = self.saved_sessions.pop(index)
+        try:
+            shutil.rmtree(saved.session_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        if self.current_session_dir == saved.session_dir:
+            self.reset_playback_state()
+
+        self.persist_saved_sessions()
+        self.refresh_saved_sessions_ui()
+        self.saved_listbox.selection_clear(0, tk.END)
+
+    def load_saved_session(self, saved: SavedSession):
+        self.reset_playback_state()
+
+        self.full_mix_path = saved.audio_path
+        self.current_session_dir = saved.session_dir
+        self.current_stems_dir = saved.stems_dir
+        self.current_title = saved.title
+        self.song_key_text = saved.song_key_text
+        self.current_thumbnail_url = None
+        self.current_thumbnail_path = saved.thumbnail_path
+
+        if saved.thumbnail_path and os.path.exists(saved.thumbnail_path):
+            self.update_thumbnail_from_file(saved.thumbnail_path)
+        else:
+            self.thumbnail_image = None
+            self.thumbnail_label.configure(image="", text="No\nthumbnail")
+
+        self.root.title(saved.title)
+        try:
+            self.setup_player(saved.stems_dir)
+        except Exception as exc:
+            self.append_log(f"Failed to load saved session: {exc}")
+
 
     # ---------- logging / status ----------
 
@@ -144,6 +391,8 @@ class YTDemucsApp:
     # ---------- thumbnail ----------
 
     def update_thumbnail(self, thumb_url: str | None):
+        self.current_thumbnail_url = thumb_url
+        self.current_thumbnail_path = None
         if not thumb_url:
             self.append_log("No thumbnail URL found.")
             return
@@ -172,6 +421,18 @@ class YTDemucsApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def update_thumbnail_from_file(self, path: str):
+        try:
+            image = Image.open(path)
+            image.thumbnail((240, 240))
+            photo = ImageTk.PhotoImage(image)
+        except Exception as exc:
+            self.append_log(f"Could not load thumbnail from disk: {exc}")
+            return
+
+        self.thumbnail_image = photo
+        self.thumbnail_label.configure(image=photo, text="")
+
     # ---------- main button ----------
 
     def on_start(self):
@@ -199,8 +460,15 @@ class YTDemucsApp:
 
     def handle_pipeline_success(self, result: PipelineResult):
         self.full_mix_path = result.audio_path
+        self.current_session_dir = result.session_dir
+        self.current_stems_dir = result.stems_dir
         self.current_title = result.title
         self.song_key_text = result.song_key_text
+        self.current_thumbnail_url = result.thumbnail_url
+        self.current_thumbnail_path = None
+
+        self.root.after(0, lambda: self.saved_listbox.selection_clear(0, tk.END))
+        self.root.after(0, self.update_sidebar_button_state)
 
         if result.thumbnail_url:
             self.update_thumbnail(result.thumbnail_url)
@@ -382,6 +650,7 @@ class YTDemucsApp:
         # initial waveform
         self.update_waveform_from_selection()
         self.draw_waveform()
+        self.update_sidebar_button_state()
 
     # ---------- waveform logic ----------
 
@@ -514,6 +783,48 @@ class YTDemucsApp:
 
     # ---------- RESET & CLEAR ----------
 
+    def reset_playback_state(self):
+        try:
+            self.player.stop()
+            self.player.stop_stream()
+        except Exception:
+            pass
+
+        self.player = StemAudioPlayer()
+        if not self.player.audio_ok:
+            self.append_log(f"Audio engine not available: {self.player.error_message}")
+
+        for w in self.player_frame.winfo_children():
+            w.destroy()
+
+        self.wave_canvas = None
+        self.wave_cursor_id = None
+        self.time_label = None
+        self.play_pause_button = None
+        self.stop_button = None
+        self.volume_var = None
+        self.volume_label = None
+        self.speed_var = None
+        self.speed_label = None
+        self.pitch_var = None
+        self.pitch_label = None
+        self.all_var = None
+        self.waveform_points = []
+        self.waveform_duration = 0.0
+        self.stem_vars.clear()
+        self.full_mix_path = None
+        self.current_session_dir = None
+        self.current_stems_dir = None
+        self.current_title = None
+        self.song_key_text = None
+        self.current_thumbnail_url = None
+        self.current_thumbnail_path = None
+
+        self.thumbnail_image = None
+        self.thumbnail_label.configure(image="", text="No\nthumbnail")
+        self.root.title(self.base_title)
+        self.update_sidebar_button_state()
+
     def on_reset_playback(self):
         """
         Reset speed to 1x, pitch to +0.0 st, volume to 100%.
@@ -553,44 +864,7 @@ class YTDemucsApp:
           - clear URL, log, thumbnail
           - reset skip separation, status, window title
         """
-        # stop audio + stream
-        try:
-            self.player.stop()
-            self.player.stop_stream()
-        except Exception:
-            pass
-
-        # fresh player instance
-        self.player = StemAudioPlayer()
-        if not self.player.audio_ok:
-            self.append_log(f"Audio engine not available: {self.player.error_message}")
-
-        # clear playback UI
-        for w in self.player_frame.winfo_children():
-            w.destroy()
-
-        self.wave_canvas = None
-        self.wave_cursor_id = None
-        self.time_label = None
-        self.play_pause_button = None
-        self.stop_button = None
-        self.volume_var = None
-        self.volume_label = None
-        self.speed_var = None
-        self.speed_label = None
-        self.pitch_var = None
-        self.pitch_label = None
-        self.all_var = None
-        self.waveform_points = []
-        self.waveform_duration = 0.0
-        self.stem_vars.clear()
-        self.full_mix_path = None
-        self.current_title = None
-        self.song_key_text = None
-
-        # clear thumbnail
-        self.thumbnail_image = None
-        self.thumbnail_label.configure(image="", text="No\nthumbnail")
+        self.reset_playback_state()
 
         # clear URL
         self.url_var.set("")
@@ -603,9 +877,6 @@ class YTDemucsApp:
         # reset status & controls
         self.skip_sep_var.set(False)
         self.status_var.set("Idle")
-
-        # reset window title
-        self.root.title(self.base_title)
 
     # ---------- volume / speed / pitch / stems / "All" ----------
     @staticmethod
