@@ -591,6 +591,8 @@ class YTDemucsApp:
         self.render_progress_label = ttk.Label(
             self.player_frame,
             textvariable=self.render_progress_label_var,
+            # Fixed width prevents layout shifts when the status text changes.
+            width=28,
         )
         self.render_progress_label.grid(
             row=7,
