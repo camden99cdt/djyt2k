@@ -458,26 +458,34 @@ class YTDemucsApp:
         self.wave_canvas.bind("<Button-1>", self.on_waveform_click)
 
         # stem checkboxes (only if we actually have stems)
+        stems_frame = ttk.Frame(self.player_frame)
+        stems_frame.grid(
+            row=1,
+            column=0,
+            columnspan=max(6, len(stem_names) + 2),
+            sticky="w",
+        )
+
         for idx, stem_name in enumerate(stem_names):
             var = tk.BooleanVar(value=True)
             cb = ttk.Checkbutton(
-                self.player_frame,
+                stems_frame,
                 text=stem_name,
                 variable=var,
                 command=self.on_stem_toggle,
             )
-            cb.grid(row=1, column=idx, sticky="w", padx=(0, 5))
+            cb.grid(row=0, column=idx + 1, sticky="w", padx=(0, 5))
             self.stem_vars[stem_name] = var
 
         # "All" checkbox (full mix)
         self.all_var = tk.BooleanVar(value=(stems_dir is None))
         cb_all = ttk.Checkbutton(
-            self.player_frame,
+            stems_frame,
             text="All",
             variable=self.all_var,
             command=self.on_all_toggle,
         )
-        cb_all.grid(row=1, column=len(stem_names), sticky="w", padx=(10, 0))
+        cb_all.grid(row=0, column=0, sticky="w", padx=(0, 10))
 
         # If no stems at all (skip separation), force All mode in player
         if not stem_names:
