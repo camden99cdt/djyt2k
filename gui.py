@@ -803,8 +803,7 @@ class YTDemucsApp:
 
         # audio engine
         self.player.set_master_volume(1.0)
-        self.player.set_tempo_rate(1.0)
-        self.player.set_pitch_semitones(0.0)
+        self.player.set_tempo_and_pitch(1.0, 0.0)
 
         # refresh duration & waveform
         self.waveform_duration = self.player.get_duration()
