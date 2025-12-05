@@ -99,6 +99,10 @@ class YTDemucsApp:
         self.pitch_var: tk.DoubleVar | None = None
         self.pitch_label: ttk.Label | None = None
         self.all_var: tk.BooleanVar | None = None
+        self.render_progress_var: tk.DoubleVar | None = None
+        self.render_progress_label_var: tk.StringVar | None = None
+        self.render_progress_bar: ttk.Progressbar | None = None
+        self.render_progress_label: ttk.Label | None = None
 
         self.waveform_points: list[float] = []
         self.waveform_duration: float = 0.0
@@ -112,6 +116,8 @@ class YTDemucsApp:
         self.player = StemAudioPlayer()
         if not self.player.audio_ok:
             self.append_log(f"Audio engine not available: {self.player.error_message}")
+        else:
+            self.player.set_render_progress_callback(self.on_render_progress)
 
         # pipeline orchestration
         self.pipeline_runner = PipelineRunner(
@@ -235,6 +241,10 @@ class YTDemucsApp:
         self.pitch_var = None
         self.pitch_label = None
         self.all_var = None
+        self.render_progress_var = None
+        self.render_progress_label_var = None
+        self.render_progress_bar = None
+        self.render_progress_label = None
         self.waveform_points = []
         self.waveform_duration = 0.0
         self.stem_vars.clear()
@@ -378,6 +388,34 @@ class YTDemucsApp:
         )
         pitch_slider.grid(row=5, column=1, columnspan=4, sticky="ew", pady=(5, 0))
         pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
+
+        # rendering progress (bottom of player area)
+        self.render_progress_var = tk.DoubleVar(value=0.0)
+        self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
+        self.render_progress_bar = ttk.Progressbar(
+            self.player_frame,
+            variable=self.render_progress_var,
+            maximum=100,
+            mode="determinate",
+        )
+        self.render_progress_bar.grid(
+            row=6,
+            column=0,
+            columnspan=4,
+            sticky="ew",
+            pady=(10, 0),
+        )
+        self.render_progress_label = ttk.Label(
+            self.player_frame,
+            textvariable=self.render_progress_label_var,
+        )
+        self.render_progress_label.grid(
+            row=6,
+            column=4,
+            columnspan=max(1, len(stem_names) - 3),
+            sticky="w",
+            pady=(10, 0),
+        )
 
         # initial waveform
         self.update_waveform_from_selection()
@@ -564,6 +602,8 @@ class YTDemucsApp:
         self.player = StemAudioPlayer()
         if not self.player.audio_ok:
             self.append_log(f"Audio engine not available: {self.player.error_message}")
+        else:
+            self.player.set_render_progress_callback(self.on_render_progress)
 
         # clear playback UI
         for w in self.player_frame.winfo_children():
@@ -718,6 +758,28 @@ class YTDemucsApp:
         if self.volume_label is not None:
             pct = int(v * 100)
             self.volume_label.config(text=f"Volume: {pct}%")
+
+
+    # ---------- render progress ----------
+
+    def on_render_progress(self, progress: float, label: str):
+        def _update():
+            if (
+                self.render_progress_var is None
+                or self.render_progress_label_var is None
+            ):
+                return
+
+            try:
+                pct = max(0.0, min(float(progress), 1.0)) * 100.0
+            except (TypeError, ValueError):
+                pct = 0.0
+            self.render_progress_var.set(pct)
+
+            text = label.strip() if label else "Ready"
+            self.render_progress_label_var.set(f"Rendering: {text}")
+
+        self.root.after(0, _update)
 
 
     # ---------- periodic UI ----------

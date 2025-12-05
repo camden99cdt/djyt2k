@@ -276,6 +276,7 @@ class AudioSession:
         base_mix: Optional[np.ndarray],
         mark_missing: bool,
         log_callback=None,
+        progress_callback=None,
     ):
         if self.sample_rate is None:
             return
@@ -294,6 +295,9 @@ class AudioSession:
                         f"pitch={pitch_semitones:+.1f} st..."
                     )
 
+                total_items = len(stems_to_build) + (1 if include_mix else 0)
+                completed = 0
+
                 sr = self.sample_rate
                 if sr is None:
                     return
@@ -303,21 +307,33 @@ class AudioSession:
                     orig = self.original_stem_data.get(name)
                     if orig is None:
                         continue
+                    if progress_callback:
+                        progress_callback(
+                            completed / float(max(total_items, 1)),
+                            f"{name}, {tempo_rate:.2f}x",
+                        )
                     new_stems[name] = self._apply_tempo_pitch(
                         data=orig,
                         tempo_rate=tempo_rate,
                         pitch_semitones=pitch_semitones,
                         sr=sr,
                     )
+                    completed += 1
 
                 new_mix = base_mix
                 if include_mix and self.original_mix is not None:
+                    if progress_callback:
+                        progress_callback(
+                            completed / float(max(total_items, 1)),
+                            f"mix, {tempo_rate:.2f}x",
+                        )
                     new_mix = self._apply_tempo_pitch(
                         data=self.original_mix,
                         tempo_rate=tempo_rate,
                         pitch_semitones=pitch_semitones,
                         sr=sr,
                     )
+                    completed += 1
 
                 new_total_samples = self._compute_total_samples(new_stems, new_mix)
                 new_missing = (
@@ -340,6 +356,9 @@ class AudioSession:
 
                 if log_callback:
                     log_callback("New tempo/pitch configuration ready.")
+
+                if progress_callback:
+                    progress_callback(1.0, "")
 
             except Exception as e:
                 if log_callback:
@@ -368,6 +387,7 @@ class AudioSession:
         target_stems: Optional[Set[str]] = None,
         include_mix: Optional[bool] = None,
         log_callback=None,
+        progress_callback=None,
     ):
         """
         Request a change in tempo/pitch.
@@ -415,9 +435,10 @@ class AudioSession:
             base_mix=None,
             mark_missing=True,
             log_callback=log_callback,
+            progress_callback=progress_callback,
         )
 
-    def ensure_selection_ready(self, log_callback=None):
+    def ensure_selection_ready(self, log_callback=None, progress_callback=None):
         """
         Ensure the currently selected playback source (mix or active stems)
         has buffers rendered for the *current* tempo/pitch. Missing stems/mix
@@ -451,6 +472,7 @@ class AudioSession:
             base_mix=self.current_mix_data,
             mark_missing=True,
             log_callback=log_callback,
+            progress_callback=progress_callback,
         )
 
     def maybe_swap_pending(self, current_position_seconds: float) -> Optional[int]:

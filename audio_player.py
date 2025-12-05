@@ -35,6 +35,8 @@ class StemAudioPlayer:
         self.session = AudioSession()
         self.engine: Optional[PlaybackEngine] = None
 
+        self.render_progress_callback = None
+
         self.master_volume: float = 1.0
 
         self.play_index: int = 0
@@ -85,13 +87,15 @@ class StemAudioPlayer:
     def set_active_stems(self, names: Set[str]):
         self.session.set_active_stems(names)
         self.session.ensure_selection_ready(
-            log_callback=getattr(self, "log_callback", None)
+            log_callback=getattr(self, "log_callback", None),
+            progress_callback=self.render_progress_callback,
         )
 
     def set_play_all(self, value: bool):
         self.session.set_play_all(value)
         self.session.ensure_selection_ready(
-            log_callback=getattr(self, "log_callback", None)
+            log_callback=getattr(self, "log_callback", None),
+            progress_callback=self.render_progress_callback,
         )
 
     # ---------- tempo & pitch & volume ----------
@@ -117,6 +121,7 @@ class StemAudioPlayer:
             include_mix=self.session.play_all,
             # optionally pass a logger if you have one on the player:
             log_callback=getattr(self, "log_callback", None),
+            progress_callback=self.render_progress_callback,
         )
 
 
@@ -135,7 +140,12 @@ class StemAudioPlayer:
             target_stems=set(self.session.active_stems),
             include_mix=self.session.play_all,
             log_callback=getattr(self, "log_callback", None),
+            progress_callback=self.render_progress_callback,
         )
+
+    def set_render_progress_callback(self, callback):
+        """Optional UI hook to receive render progress updates."""
+        self.render_progress_callback = callback
 
 
     def set_master_volume(self, volume: float):
