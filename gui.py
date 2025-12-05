@@ -270,8 +270,15 @@ class YTDemucsApp:
         (with .wav) inside the session directory, finally falling back to
         the first WAV file found.
         """
-        if audio_hint and os.path.exists(audio_hint):
-            return audio_hint
+        if audio_hint:
+            if os.path.exists(audio_hint):
+                return audio_hint
+
+            # Handle hints missing an extension but where the WAV exists
+            if not os.path.splitext(audio_hint)[1]:
+                wav_guess = audio_hint + ".wav"
+                if os.path.exists(wav_guess):
+                    return wav_guess
 
         hint_base = os.path.splitext(os.path.basename(audio_hint or ""))[0]
         if hint_base:
