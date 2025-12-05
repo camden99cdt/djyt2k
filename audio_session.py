@@ -257,13 +257,36 @@ class AudioSession:
     def _apply_tempo_pitch(
         data: np.ndarray, tempo_rate: float, pitch_semitones: float, sr: int
     ) -> np.ndarray:
-        y = data
-        if tempo_rate != 1.0 and y.size > 0:
+        """
+        Apply tempo and pitch changes while preserving perceived loudness.
+
+        Librosa's phase-vocoder-based pitch shifting can introduce a gain drop
+        and a slightly duller sound because of the internal resampling filter.
+        To counteract that, we normalize the processed buffer back to the
+        original RMS and clip to a safe range. Using the higher-quality SOXR
+        resampler further reduces high-frequency loss.
+        """
+
+        if data.size == 0:
+            return np.asarray(data, dtype="float32")
+
+        y = np.asarray(data, dtype="float32")
+        original_rms = float(np.sqrt(np.mean(np.square(y)))) or 1e-12
+
+        if tempo_rate != 1.0:
             y = librosa.effects.time_stretch(y=y, rate=tempo_rate)
-        if abs(pitch_semitones) > 1e-3 and y.size > 0:
+        if abs(pitch_semitones) > 1e-3:
             y = librosa.effects.pitch_shift(
-                y=y, sr=sr, n_steps=pitch_semitones
+                y=y,
+                sr=sr,
+                n_steps=pitch_semitones,
+                res_type="soxr_hq",
             )
+
+        processed_rms = float(np.sqrt(np.mean(np.square(y)))) or 1e-12
+        gain = original_rms / processed_rms
+        y = y * gain
+        np.clip(y, -1.0, 1.0, out=y)
         return np.asarray(y, dtype="float32")
 
     def _queue_build(
