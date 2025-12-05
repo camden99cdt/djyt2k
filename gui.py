@@ -1,9 +1,7 @@
 # gui.py
-import json
 import os
 import shutil
 import threading
-from dataclasses import dataclass, asdict
 from io import BytesIO
 import urllib.request
 
@@ -14,6 +12,7 @@ from PIL import Image, ImageTk
 
 from audio_player import StemAudioPlayer
 from pipeline import PipelineResult, PipelineRunner
+from saved_sessions import SavedSession, SavedSessionStore
 
 CHROMA_LABELS = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -29,24 +28,13 @@ FLAT_TO_SHARP = {
 }
 
 
-@dataclass
-class SavedSession:
-    title: str
-    session_dir: str
-    audio_path: str
-    stems_dir: str | None
-    thumbnail_path: str | None
-    song_key_text: str | None
-
 class YTDemucsApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.base_title = "YouTube \u2192 Demucs Stems"
         self.root.title(self.base_title)
         self.saved_sessions: list[SavedSession] = []
-        self.saved_sessions_file = os.path.join(
-            os.path.expanduser("~"), ".djyt", "sessions.json"
-        )
+        self.saved_store: SavedSessionStore | None = None
 
         # ---------- layout ----------
         shell = ttk.Frame(root)
@@ -174,6 +162,7 @@ class YTDemucsApp:
             status_callback=self.set_status,
         )
 
+        self.saved_store = SavedSessionStore(log_callback=self.append_log)
         self.load_saved_sessions()
         self.refresh_saved_sessions_ui()
 
@@ -183,41 +172,14 @@ class YTDemucsApp:
     # ---------- saved sessions ----------
 
     def load_saved_sessions(self):
-        os.makedirs(os.path.dirname(self.saved_sessions_file), exist_ok=True)
-        if not os.path.exists(self.saved_sessions_file):
-            self.saved_sessions = []
-            return
-
-        try:
-            with open(self.saved_sessions_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            sessions = []
-            for item in data.get("sessions", []):
-                sessions.append(
-                    SavedSession(
-                        title=item.get("title", "Unknown"),
-                        session_dir=item.get("session_dir", ""),
-                        audio_path=item.get("audio_path", ""),
-                        stems_dir=item.get("stems_dir"),
-                        thumbnail_path=item.get("thumbnail_path"),
-                        song_key_text=item.get("song_key_text"),
-                    )
-                )
-            self.saved_sessions = [s for s in sessions if os.path.exists(s.audio_path)]
-        except Exception as exc:
-            self.saved_sessions = []
-            self.append_log(f"Failed to load saved sessions: {exc}")
+        self.saved_sessions = list(self.saved_store.sessions)
 
     def persist_saved_sessions(self):
-        try:
-            payload = {"sessions": [asdict(s) for s in self.saved_sessions]}
-            with open(self.saved_sessions_file, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-        except Exception as exc:
-            self.append_log(f"Failed to persist saved sessions: {exc}")
+        self.saved_store.persist()
 
     def refresh_saved_sessions_ui(self):
         self.saved_listbox.delete(0, tk.END)
+        self.saved_sessions = list(self.saved_store.sessions)
         for sess in self.saved_sessions:
             self.saved_listbox.insert(tk.END, sess.title)
         self.update_sidebar_button_state()
@@ -233,7 +195,7 @@ class YTDemucsApp:
         can_save = (
             self.current_stems_dir is not None
             and self.current_session_dir is not None
-            and self.find_saved_by_dir(self.current_session_dir) is None
+            and self.saved_store.find_by_dir(self.current_session_dir) is None
         )
         if can_save:
             self.sidebar_button.config(
@@ -243,32 +205,10 @@ class YTDemucsApp:
             self.sidebar_button.config(text="Save Session", state="disabled")
 
     def find_saved_by_dir(self, session_dir: str | None) -> SavedSession | None:
-        if not session_dir:
-            return None
-        for sess in self.saved_sessions:
-            if sess.session_dir == session_dir:
-                return sess
-        return None
+        return self.saved_store.find_by_dir(session_dir)
 
     def _resolve_saved_stems_dir(self, saved: SavedSession) -> str | None:
-        if saved.stems_dir and os.path.exists(saved.stems_dir):
-            return saved.stems_dir
-
-        track_name = os.path.basename(saved.stems_dir or "")
-        search_roots = [saved.session_dir, os.path.join(saved.session_dir, "separated")]
-        for root in search_roots:
-            if not os.path.isdir(root):
-                continue
-            for model_dir in os.listdir(root):
-                model_path = os.path.join(root, model_dir)
-                if not os.path.isdir(model_path):
-                    continue
-                candidate = os.path.join(model_path, track_name)
-                if os.path.isdir(candidate):
-                    return candidate
-
-        # fallback: leave as-is
-        return saved.stems_dir
+        return self.saved_store.resolve_stems_dir(saved)
 
     def on_saved_select(self, event):
         selection = self.saved_listbox.curselection()
@@ -290,60 +230,24 @@ class YTDemucsApp:
         if self.full_mix_path is None:
             messagebox.showerror("Error", "No audio available to save.")
             return
-
-        base_dir = os.path.join(os.path.expanduser("~"), ".djyt")
-        os.makedirs(base_dir, exist_ok=True)
-
-        dest_dir = os.path.join(base_dir, os.path.basename(self.current_session_dir.rstrip(os.sep)))
-        suffix = 1
-        while os.path.exists(dest_dir):
-            dest_dir = os.path.join(base_dir, f"{os.path.basename(self.current_session_dir)}_{suffix}")
-            suffix += 1
-
         try:
-            shutil.move(self.current_session_dir, dest_dir)
+            saved = self.saved_store.add_session(
+                title=self.current_title or "Unknown",
+                session_dir=self.current_session_dir,
+                full_mix_path=self.full_mix_path,
+                stems_dir=self.current_stems_dir,
+                thumbnail_url=self.current_thumbnail_url,
+                song_key_text=self.song_key_text,
+            )
         except Exception as exc:
-            messagebox.showerror("Error", f"Failed to move session to {dest_dir}: {exc}")
+            messagebox.showerror("Error", f"Failed to save session: {exc}")
             return
 
-        audio_path = os.path.join(dest_dir, os.path.basename(self.full_mix_path or ""))
-        if not os.path.exists(audio_path):
-            messagebox.showerror("Error", "Could not locate session audio to save.")
-            return
-        stems_dir = None
-        if self.current_stems_dir:
-            rel_stems = os.path.relpath(self.current_stems_dir, self.current_session_dir)
-            stems_dir = os.path.join(dest_dir, rel_stems)
-
-        thumb_path = None
-        if self.current_thumbnail_url:
-            try:
-                req = urllib.request.Request(
-                    self.current_thumbnail_url, headers={"User-Agent": "Mozilla/5.0"}
-                )
-                with urllib.request.urlopen(req) as resp:
-                    data = resp.read()
-                thumb_path = os.path.join(dest_dir, "thumbnail.jpg")
-                with open(thumb_path, "wb") as f:
-                    f.write(data)
-            except Exception as exc:
-                self.append_log(f"Could not save thumbnail: {exc}")
-
-        saved = SavedSession(
-            title=self.current_title or "Unknown",
-            session_dir=dest_dir,
-            audio_path=audio_path,
-            stems_dir=stems_dir,
-            thumbnail_path=thumb_path,
-            song_key_text=self.song_key_text,
-        )
-        self.saved_sessions.append(saved)
-        self.persist_saved_sessions()
         self.refresh_saved_sessions_ui()
-        self.current_session_dir = dest_dir
-        self.current_stems_dir = stems_dir
-        self.full_mix_path = audio_path
-        self.current_thumbnail_path = thumb_path
+        self.current_session_dir = saved.session_dir
+        self.current_stems_dir = saved.stems_dir
+        self.full_mix_path = saved.audio_path
+        self.current_thumbnail_path = saved.thumbnail_path
 
     def on_delete_saved(self):
         selection = self.saved_listbox.curselection()
@@ -353,16 +257,12 @@ class YTDemucsApp:
         if index < 0 or index >= len(self.saved_sessions):
             return
 
-        saved = self.saved_sessions.pop(index)
-        try:
-            shutil.rmtree(saved.session_dir, ignore_errors=True)
-        except Exception:
-            pass
+        saved = self.saved_sessions[index]
+        self.saved_store.delete(saved)
 
         if self.current_session_dir == saved.session_dir:
             self.reset_playback_state()
 
-        self.persist_saved_sessions()
         self.refresh_saved_sessions_ui()
         self.saved_listbox.selection_clear(0, tk.END)
 
