@@ -263,6 +263,29 @@ class YTDemucsApp:
         self.load_saved_session(saved)
         self.update_sidebar_button_state()
 
+    def _resolve_audio_path(self, session_dir: str, audio_hint: str | None) -> str | None:
+        """Ensure we point to an existing WAV for the session.
+
+        Tries the provided hint first, then looks for a matching basename
+        (with .wav) inside the session directory, finally falling back to
+        the first WAV file found.
+        """
+        if audio_hint and os.path.exists(audio_hint):
+            return audio_hint
+
+        hint_base = os.path.splitext(os.path.basename(audio_hint or ""))[0]
+        if hint_base:
+            for name in os.listdir(session_dir):
+                if not name.lower().endswith(".wav"):
+                    continue
+                if os.path.splitext(name)[0] == hint_base:
+                    return os.path.join(session_dir, name)
+
+        for name in sorted(os.listdir(session_dir)):
+            if name.lower().endswith(".wav"):
+                return os.path.join(session_dir, name)
+        return None
+
     def on_save_session(self):
         if self.current_stems_dir is None or self.current_session_dir is None:
             messagebox.showerror("Error", "No separated stems to save.")
@@ -286,7 +309,12 @@ class YTDemucsApp:
             messagebox.showerror("Error", f"Failed to move session to {dest_dir}: {exc}")
             return
 
-        audio_path = os.path.join(dest_dir, os.path.basename(self.full_mix_path or ""))
+        audio_path = self._resolve_audio_path(
+            dest_dir, os.path.join(dest_dir, os.path.basename(self.full_mix_path or ""))
+        )
+        if audio_path is None:
+            messagebox.showerror("Error", "Could not locate session audio to save.")
+            return
         stems_dir = (
             os.path.join(dest_dir, os.path.basename(self.current_stems_dir))
             if self.current_stems_dir
@@ -322,7 +350,6 @@ class YTDemucsApp:
         self.current_stems_dir = stems_dir
         self.full_mix_path = audio_path
         self.current_thumbnail_path = thumb_path
-        messagebox.showinfo("Saved", "Session saved for later use.")
 
     def on_delete_saved(self):
         selection = self.saved_listbox.curselection()
@@ -348,7 +375,16 @@ class YTDemucsApp:
     def load_saved_session(self, saved: SavedSession):
         self.reset_playback_state()
 
-        self.full_mix_path = saved.audio_path
+        audio_path = self._resolve_audio_path(saved.session_dir, saved.audio_path)
+        if audio_path is None:
+            self.append_log("Saved session is missing its audio file.")
+            return
+
+        if saved.audio_path != audio_path:
+            saved.audio_path = audio_path
+            self.persist_saved_sessions()
+
+        self.full_mix_path = audio_path
         self.current_session_dir = saved.session_dir
         self.current_stems_dir = saved.stems_dir
         self.current_title = saved.title
