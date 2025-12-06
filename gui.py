@@ -361,6 +361,8 @@ class YTDemucsApp:
             "yt-dlp",
             "--flat-playlist",
             "--dump-json",
+            "--extractor-args",
+            "youtubetab:approximate_date",
             f"ytsearch5:{query}",
         ]
         try:
@@ -412,18 +414,18 @@ class YTDemucsApp:
         if not isinstance(data, dict):
             return None
 
-        thumb_url = data.get("thumbnail")
-        if thumb_url:
-            return thumb_url
-
         thumbs = data.get("thumbnails")
         if isinstance(thumbs, list):
-            for entry in reversed(thumbs):
+            for entry in thumbs:
                 if not isinstance(entry, dict):
                     continue
                 url = entry.get("url") or entry.get("thumbnail")
                 if url:
                     return url
+
+        thumb_url = data.get("thumbnail")
+        if thumb_url:
+            return thumb_url
 
         return None
 
