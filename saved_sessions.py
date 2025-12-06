@@ -21,8 +21,14 @@ class SavedSession:
     @property
     def display_name(self) -> str:
         if self.song_key_text:
-            return f"{self.title} ({self.song_key_text})"
-        return self.title
+            base = f"{self.title} ({self.song_key_text})"
+        else:
+            base = self.title
+
+        if not self.stems_rel_dir:
+            return f"{base} [ns]"
+
+        return base
 
     @property
     def audio_path(self) -> str:
