@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 import json
+import time
 import subprocess
 import urllib.request
 
@@ -17,6 +18,7 @@ class SearchResult:
     url: str
     duration: str
     published: str
+    thumbnail_url: str | None
     thumbnail_bytes: bytes | None
 
 
@@ -29,13 +31,16 @@ class SearchDropdownController:
         self.search_debounce_id: str | None = None
         self.search_request_counter = 0
         self.search_executor = ThreadPoolExecutor(max_workers=2)
+        self.thumbnail_executor = ThreadPoolExecutor(max_workers=4)
         self.search_dropdown: tk.Toplevel | None = None
         self.search_result_frames: list[tk.Widget] = []
+        self.search_thumbnail_labels: list[tk.Label] = []
         self.search_result_images: list[ImageTk.PhotoImage] = []
         self.search_results: list[SearchResult] = []
         self.highlight_index: int = -1
         self.search_loading: bool = False
         self.search_row_height_estimate: int = 64
+        self.search_cache: dict[str, tuple[float, list[SearchResult]]] = {}
 
         self.url_var.trace_add("write", self.on_url_text_change)
         self.url_entry.bind("<KeyRelease>", self.on_url_keypress)
@@ -47,6 +52,10 @@ class SearchDropdownController:
             self.search_debounce_id = None
         try:
             self.search_executor.shutdown(wait=False)
+        except Exception:
+            pass
+        try:
+            self.thumbnail_executor.shutdown(wait=False)
         except Exception:
             pass
         self.hide_search_dropdown()
@@ -90,6 +99,12 @@ class SearchDropdownController:
 
     def trigger_search(self, query: str):
         self.search_debounce_id = None
+        cached = self.get_cached_results(query)
+        if cached:
+            self.search_results = cached
+            self.search_loading = False
+            self.show_search_dropdown()
+            return
         self.search_request_counter += 1
         request_id = self.search_request_counter
         self.search_loading = True
@@ -136,8 +151,6 @@ class SearchDropdownController:
             published = self.format_time_ago(data)
             thumb_bytes = None
             thumb_url = data.get("thumbnail")
-            if thumb_url:
-                thumb_bytes = self.fetch_thumbnail_bytes(thumb_url)
 
             if title and url:
                 results.append(
@@ -146,6 +159,7 @@ class SearchDropdownController:
                         url=url,
                         duration=duration,
                         published=published,
+                        thumbnail_url=thumb_url,
                         thumbnail_bytes=thumb_bytes,
                     )
                 )
@@ -218,10 +232,36 @@ class SearchDropdownController:
             self.hide_search_dropdown()
             return
         if not results:
-            results = [SearchResult("No results", "", "", "", None)]
+            results = [SearchResult("No results", "", "", "", None, None)]
         self.search_results = results
         self.search_loading = False
+        self.add_results_to_cache(query, results)
         self.show_search_dropdown()
+        self.queue_thumbnail_fetches(request_id)
+
+    def queue_thumbnail_fetches(self, request_id: int):
+        for idx, result in enumerate(self.search_results):
+            if not result.thumbnail_bytes and result.thumbnail_url:
+                future = self.thumbnail_executor.submit(
+                    self.fetch_thumbnail_bytes, result.thumbnail_url
+                )
+                future.add_done_callback(
+                    lambda fut, i=idx: self.on_thumbnail_fetched(request_id, i, fut)
+                )
+
+    def on_thumbnail_fetched(self, request_id: int, index: int, future):
+        if request_id != self.search_request_counter:
+            return
+        try:
+            thumb_bytes = future.result()
+        except Exception:
+            thumb_bytes = None
+        if thumb_bytes is None:
+            return
+        if index >= len(self.search_results):
+            return
+        self.search_results[index].thumbnail_bytes = thumb_bytes
+        self.root.after(0, lambda i=index: self.update_thumbnail_image(i))
 
     def show_search_dropdown(self, loading: bool = False):
         if not self.search_results and not loading:
@@ -248,6 +288,7 @@ class SearchDropdownController:
         list_frame.pack(fill="both", expand=True)
 
         self.search_result_frames.clear()
+        self.search_thumbnail_labels.clear()
         self.search_result_images.clear()
         self.highlight_index = -1
 
@@ -277,6 +318,7 @@ class SearchDropdownController:
                     thumb_label.configure(text="No\nthumb", bg="#ffffff")
             else:
                 thumb_label.configure(text="No\nthumb", bg="#ffffff")
+            self.search_thumbnail_labels.append(thumb_label)
 
             text_frame = tk.Frame(row, bg="#ffffff")
             text_frame.pack(side="left", fill="x", expand=True)
@@ -317,6 +359,24 @@ class SearchDropdownController:
         visible_rows = max(5, len(self.search_result_frames))
         height = row_height * visible_rows
         self.search_dropdown.geometry(f"{width}x{height}+{x}+{y}")
+
+    def update_thumbnail_image(self, index: int):
+        if not self.search_dropdown or not self.search_dropdown.winfo_exists():
+            return
+        if index >= len(self.search_results) or index >= len(self.search_thumbnail_labels):
+            return
+        result = self.search_results[index]
+        thumb_label = self.search_thumbnail_labels[index]
+        if not result.thumbnail_bytes:
+            return
+        try:
+            image = Image.open(BytesIO(result.thumbnail_bytes))
+            image.thumbnail((80, 45))
+            photo = ImageTk.PhotoImage(image)
+            thumb_label.configure(image=photo, text="")
+            self.search_result_images.append(photo)
+        except Exception:
+            return
 
     def bind_search_row_click(self, widget: tk.Widget, index: int):
         widget.bind(
@@ -378,3 +438,21 @@ class SearchDropdownController:
         self.search_result_frames.clear()
         self.search_result_images.clear()
         self.highlight_index = -1
+
+    def get_cached_results(self, query: str) -> list[SearchResult] | None:
+        normalized = query.strip().lower()
+        if not normalized:
+            return None
+        cached = self.search_cache.get(normalized)
+        if not cached:
+            return None
+        timestamp, results = cached
+        if time.monotonic() - timestamp > 120:
+            return None
+        return [SearchResult(**result.__dict__) for result in results]
+
+    def add_results_to_cache(self, query: str, results: list[SearchResult]):
+        normalized = query.strip().lower()
+        if not normalized:
+            return
+        self.search_cache[normalized] = (time.monotonic(), results)
