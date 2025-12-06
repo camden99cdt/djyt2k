@@ -429,7 +429,7 @@ class AudioSession:
 
         # Clamp / normalize
         new_tempo_rate = max(0.25, min(float(new_tempo_rate), 2.0))
-        new_pitch_semitones = max(-3.0, min(3.0, float(new_pitch_semitones)))
+        new_pitch_semitones = max(-6.0, min(6.0, float(new_pitch_semitones)))
 
         # If exactly the same as current, do nothing
         if (
