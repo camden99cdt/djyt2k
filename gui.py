@@ -59,10 +59,12 @@ class YTDemucsApp:
 
         self.youtube_tab = ttk.Frame(self.notebook, padding=10)
         self.playback_tab = ttk.Frame(self.notebook, padding=10)
+        self.harmonics_tab = ttk.Frame(self.notebook, padding=10)
         self.sessions_tab = ttk.Frame(self.notebook, padding=10)
 
         self.notebook.add(self.youtube_tab, text="YouTube")
         self.notebook.add(self.playback_tab, text="Playback")
+        self.notebook.add(self.harmonics_tab, text="Harmonics")
         self.notebook.add(self.sessions_tab, text="Sessions")
 
         ttk.Label(self.youtube_tab, text="YouTube URL:").grid(row=0, column=0, sticky="w")
@@ -112,6 +114,7 @@ class YTDemucsApp:
         meter_frame = ttk.Frame(playback_top)
         meter_frame.grid(row=0, column=1, sticky="ew")
         meter_frame.columnconfigure(1, weight=1)
+        meter_frame.columnconfigure(2, weight=1)
 
         ttk.Label(meter_frame, text="Output Level").grid(row=0, column=0, sticky="w")
         self.audio_meter = ttk.Progressbar(
@@ -140,12 +143,39 @@ class YTDemucsApp:
         self.gain_slider.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
 
+        self.reverb_enabled_var = tk.BooleanVar(value=True)
+        self.reverb_mix_var = tk.DoubleVar(value=0.45)
+        self.reverb_checkbox = ttk.Checkbutton(
+            meter_frame,
+            text="Enable Reverb",
+            variable=self.reverb_enabled_var,
+            command=self.on_reverb_toggle,
+        )
+        self.reverb_checkbox.grid(row=2, column=0, pady=(10, 0), sticky="w")
+
+        self.reverb_mix_label = ttk.Label(meter_frame, text="45% wet")
+        self.reverb_mix_label.grid(row=2, column=2, pady=(10, 0), sticky="e")
+
+        self.reverb_mix_slider = ttk.Scale(
+            meter_frame,
+            from_=0.0,
+            to=1.0,
+            orient="horizontal",
+            variable=self.reverb_mix_var,
+            command=self.on_reverb_mix_change,
+            length=280,
+        )
+        self.reverb_mix_slider.grid(row=2, column=1, sticky="ew", pady=(10, 0))
+
+        self.harmonics_tab.columnconfigure(0, weight=1)
+        self.harmonics_tab.rowconfigure(0, weight=1)
+        harmonics_frame = ttk.Frame(self.harmonics_tab)
+        harmonics_frame.grid(row=0, column=0, sticky="nsew")
+        for col in range(6):
+            harmonics_frame.columnconfigure(col, weight=1)
+
         self.key_table_headers: list[ttk.Label] = []
         self.key_table_value_labels: dict[str, ttk.Label] = {}
-        self.key_table_frame = ttk.Frame(meter_frame)
-        self.key_table_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
-        for col in range(6):
-            self.key_table_frame.columnconfigure(col, weight=1)
 
         headers = ["Key", "+1", "-1", "Rel", "Sub", "Dom"]
         value_keys = [
@@ -157,12 +187,12 @@ class YTDemucsApp:
             "dominant",
         ]
         for idx, text in enumerate(headers):
-            lbl = ttk.Label(self.key_table_frame, text=text, anchor="center", justify="center")
+            lbl = ttk.Label(harmonics_frame, text=text, anchor="center", justify="center")
             lbl.grid(row=0, column=idx, sticky="ew")
             self.key_table_headers.append(lbl)
 
         for idx, key in enumerate(value_keys):
-            lbl = ttk.Label(self.key_table_frame, text="N/A", anchor="center", justify="center")
+            lbl = ttk.Label(harmonics_frame, text="N/A", anchor="center", justify="center")
             lbl.grid(row=1, column=idx, sticky="ew", pady=(4, 0))
             self.key_table_value_labels[key] = lbl
 
@@ -336,21 +366,22 @@ class YTDemucsApp:
         self.speed_label: ttk.Label | None = None
         self.pitch_var: tk.DoubleVar | None = None
         self.pitch_label: ttk.Label | None = None
-        self.reverb_enabled_var: tk.BooleanVar | None = None
-        self.reverb_mix_var: tk.DoubleVar | None = None
-        self.reverb_checkbox: ttk.Checkbutton | None = None
-        self.reverb_mix_label: ttk.Label | None = None
-        self.reverb_mix_slider: ttk.Scale | None = None
         self.all_var: tk.BooleanVar | None = None
         self.render_progress_var: tk.DoubleVar | None = None
         self.render_progress_label_var: tk.StringVar | None = None
         self.render_progress_bar: ttk.Progressbar | None = None
         self.render_progress_label: ttk.Label | None = None
-        self.playback_control_widgets: list[tk.Widget] = [self.audio_meter, self.gain_slider]
+        self.playback_control_widgets: list[tk.Widget] = [
+            self.audio_meter,
+            self.gain_slider,
+            self.reverb_checkbox,
+            self.reverb_mix_slider,
+        ]
         self.playback_label_widgets: list[ttk.Label] = [
             self.audio_meter_label,
             self.gain_label,
             self.thumbnail_label,
+            self.reverb_mix_label,
         ]
         self.playback_label_widgets.extend(self.key_table_headers)
         self.playback_label_widgets.extend(self.key_table_value_labels.values())
@@ -1226,21 +1257,22 @@ class YTDemucsApp:
         self.speed_label = None
         self.pitch_var = None
         self.pitch_label = None
-        self.reverb_enabled_var = None
-        self.reverb_mix_var = None
-        self.reverb_checkbox = None
-        self.reverb_mix_label = None
-        self.reverb_mix_slider = None
         self.all_var = None
         self.render_progress_var = None
         self.render_progress_label_var = None
         self.render_progress_bar = None
         self.render_progress_label = None
-        self.playback_control_widgets = [self.audio_meter, self.gain_slider]
+        self.playback_control_widgets = [
+            self.audio_meter,
+            self.gain_slider,
+            self.reverb_checkbox,
+            self.reverb_mix_slider,
+        ]
         self.playback_label_widgets = [
             self.audio_meter_label,
             self.gain_label,
             self.thumbnail_label,
+            self.reverb_mix_label,
         ]
         self.playback_label_widgets.extend(self.key_table_headers)
         self.playback_label_widgets.extend(self.key_table_value_labels.values())
@@ -1419,44 +1451,17 @@ class YTDemucsApp:
 
         self.update_key_table(self.pitch_var.get())
 
-        # Reverb (row 6)
-        self.reverb_enabled_var = tk.BooleanVar(value=True)
-        self.reverb_mix_var = tk.DoubleVar(value=0.45)
-        self.reverb_checkbox = ttk.Checkbutton(
-            self.player_frame,
-            text="Enable Reverb",
-            variable=self.reverb_enabled_var,
-            command=self.on_reverb_toggle,
-        )
-        self.reverb_checkbox.grid(row=6, column=0, pady=(5, 0), sticky="w")
-
-        self.reverb_mix_label = ttk.Label(self.player_frame, text="45% wet")
-        self.reverb_mix_label.grid(row=6, column=4, pady=(5, 0), sticky="e")
-
-        self.reverb_mix_slider = ttk.Scale(
-            self.player_frame,
-            from_=0.0,
-            to=1.0,
-            orient="horizontal",
-            variable=self.reverb_mix_var,
-            command=self.on_reverb_mix_change,
-            length=500,
-        )
-        self.reverb_mix_slider.grid(row=6, column=1, columnspan=3, sticky="ew", pady=(5, 0))
-
-        self.playback_control_widgets.extend(
-            [self.reverb_checkbox, self.reverb_mix_slider]
-        )
-        if self.reverb_mix_label is not None:
-            self.playback_label_widgets.append(self.reverb_mix_label)
-
-        self.player.set_reverb_enabled(self.reverb_enabled_var.get())
+        if self.reverb_enabled_var is not None:
+            self.reverb_enabled_var.set(True)
+        if self.reverb_mix_var is not None:
+            self.reverb_mix_var.set(0.45)
+        self.player.set_reverb_enabled(bool(self.reverb_enabled_var.get()))
         self.on_reverb_mix_change(str(self.reverb_mix_var.get()))
         self.update_reverb_controls_state()
 
         # rendering progress (bottom of player area)
         ttk.Separator(self.player_frame, orient="horizontal").grid(
-            row=7,
+            row=6,
             column=0,
             columnspan=max(5, len(stem_names) + 1),
             sticky="ew",
@@ -1471,7 +1476,7 @@ class YTDemucsApp:
             mode="determinate",
         )
         self.render_progress_bar.grid(
-            row=8,
+            row=7,
             column=0,
             columnspan=4,
             sticky="ew",
@@ -1484,7 +1489,7 @@ class YTDemucsApp:
             width=28,
         )
         self.render_progress_label.grid(
-            row=8,
+            row=7,
             column=4,
             columnspan=max(1, len(stem_names) - 3),
             sticky="w",
@@ -1921,6 +1926,22 @@ class YTDemucsApp:
                 except Exception:
                     pass
 
+    def get_reverb_enabled(self) -> bool:
+        if self.reverb_enabled_var is not None:
+            try:
+                return bool(self.reverb_enabled_var.get())
+            except Exception:
+                return False
+        return False
+
+    def set_reverb_enabled_from_master(self, enabled: bool):
+        if self.reverb_enabled_var is not None:
+            self.reverb_enabled_var.set(enabled)
+        self.on_reverb_toggle()
+
+    def toggle_reverb_from_master(self):
+        self.set_reverb_enabled_from_master(not self.get_reverb_enabled())
+
 
     def on_stem_toggle(self):
         if self.all_var is not None:
@@ -2330,6 +2351,13 @@ class MasterWindow:
         stop_btn = ttk.Button(frame, text="Stop", command=lambda a=app: self.stop_session(a))
         stop_btn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 0))
 
+        reverb_btn = ttk.Button(
+            frame,
+            text="Reverb",
+            command=lambda a=app: self.toggle_reverb(a),
+        )
+        reverb_btn.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
 
@@ -2343,6 +2371,7 @@ class MasterWindow:
             "solo_btn": solo_btn,
             "play_btn": play_btn,
             "stop_btn": stop_btn,
+            "reverb_btn": reverb_btn,
             "muted": False,
             "saved_volume": None,
             "solo_restore_volume": None,
@@ -2422,6 +2451,12 @@ class MasterWindow:
     def clear_solo(self):
         self.solo_target = None
         self.enforce_solo_rules()
+
+    def toggle_reverb(self, app: YTDemucsApp):
+        if not app.playback_enabled:
+            return
+        app.toggle_reverb_from_master()
+        self.update_reverb_button(app)
 
     def enforce_solo_rules(self):
         for app, state in self.session_states.items():
@@ -2578,6 +2613,25 @@ class MasterWindow:
         power = sum(max(0.0, l) ** 2 for l in levels)
         return max(0.0, min(math.sqrt(power), 1.0))
 
+    def update_reverb_button(self, app: YTDemucsApp):
+        state = self.session_states.get(app)
+        if not state:
+            return
+        enabled = app.get_reverb_enabled()
+        try:
+            if app.playback_enabled:
+                state["reverb_btn"].state(["!disabled"])
+            else:
+                state["reverb_btn"].state(["disabled"])
+        except Exception:
+            try:
+                state["reverb_btn"].configure(
+                    state="normal" if app.playback_enabled else "disabled"
+                )
+            except Exception:
+                pass
+        state["reverb_btn"].config(text=f"Reverb ({'On' if enabled else 'Off'})")
+
     def update_loop(self):
         if not self.window.winfo_exists():
             return
@@ -2622,6 +2676,8 @@ class MasterWindow:
                 state["play_btn"].config(text="Resume")
             else:
                 state["play_btn"].config(text="Play")
+
+            self.update_reverb_button(app)
 
         self.enforce_solo_rules()
         self.update_master_mute_button()
