@@ -48,6 +48,7 @@ class AudioSession:
         self.pending_missing_stems: Set[str] = set()
         self.pending_total_samples: int = 0
         self.pending_reverb_mix_data: Optional[np.ndarray] = None
+        self.pending_reverb_stem_data: Dict[str, np.ndarray] = {}
         self.pending_ready: bool = False
         self._pending_generation: int = 0  # to discard stale builds
         self._pending_lock = threading.Lock()
@@ -62,6 +63,7 @@ class AudioSession:
         self.reverb_enabled: bool = False
         self.reverb_balance: float = 0.0  # -1.0 (dry) to +1.0 (wet)
         self.current_reverb_mix_data: Optional[np.ndarray] = None
+        self.current_reverb_stem_data: Dict[str, np.ndarray] = {}
 
     # -------------------------------------------------------------------------
     # LOADING
@@ -183,6 +185,7 @@ class AudioSession:
         self.current_stem_data.clear()
         self.current_mix_data = None
         self.current_reverb_mix_data = None
+        self.current_reverb_stem_data = {}
         self.tempo_rate = 1.0
         self.pitch_semitones = 0.0
         self.current_missing_stems = set()
@@ -200,6 +203,7 @@ class AudioSession:
             self.pending_stem_data = {}
             self.pending_mix_data = None
             self.pending_reverb_mix_data = None
+            self.pending_reverb_stem_data = {}
             self.pending_missing_stems = set()
             self.pending_total_samples = 0
             self.pending_ready = False
@@ -341,6 +345,7 @@ class AudioSession:
         base_stems: Dict[str, np.ndarray],
         base_mix: Optional[np.ndarray],
         base_reverb_mix: Optional[np.ndarray],
+        base_reverb_stems: Dict[str, np.ndarray],
         build_reverb: bool,
         mark_missing: bool,
         log_callback=None,
@@ -353,7 +358,8 @@ class AudioSession:
         include_mix = bool(include_mix) and self.original_mix is not None
 
         if not stems_to_build and not include_mix:
-            return
+            if not build_reverb or not base_stems:
+                return
 
         def worker(generation: int):
             try:
@@ -371,6 +377,9 @@ class AudioSession:
                     return
 
                 new_stems: Dict[str, np.ndarray] = dict(base_stems)
+                new_reverb_stems: Dict[str, np.ndarray] = (
+                    dict(base_reverb_stems) if build_reverb else {}
+                )
                 for name in stems_to_build:
                     orig = self.original_stem_data.get(name)
                     if orig is None:
@@ -386,6 +395,8 @@ class AudioSession:
                         pitch_semitones=pitch_semitones,
                         sr=sr,
                     )
+                    if build_reverb:
+                        new_reverb_stems[name] = self._apply_reverb(new_stems[name], sr)
                     completed += 1
 
                 new_mix = base_mix
@@ -408,6 +419,12 @@ class AudioSession:
                         new_reverb_mix = self._apply_reverb(new_mix, sr)
                     completed += 1
 
+                if build_reverb:
+                    for name, data in new_stems.items():
+                        if name in new_reverb_stems:
+                            continue
+                        new_reverb_stems[name] = self._apply_reverb(data, sr)
+
                 new_total_samples = self._compute_total_samples(new_stems, new_mix)
                 new_missing = (
                     set(self.original_stem_data.keys()) - set(new_stems.keys())
@@ -425,6 +442,9 @@ class AudioSession:
                     self.pending_pitch_semitones = pitch_semitones
                     self.pending_total_samples = new_total_samples
                     self.pending_reverb_mix_data = new_reverb_mix if build_reverb else None
+                    self.pending_reverb_stem_data = (
+                        dict(new_reverb_stems) if build_reverb else {}
+                    )
                     self.pending_missing_stems = new_missing
                     self.pending_ready = True
 
@@ -471,23 +491,8 @@ class AudioSession:
     def ensure_reverb_ready(self, log_callback=None, progress_callback=None):
         if not self.reverb_enabled or self.sample_rate is None:
             return
-        if self.original_mix is None or self.original_mix.size == 0:
-            return
-        if self.current_reverb_mix_data is not None and self.current_mix_data is not None:
-            return
-
-        self._queue_build(
-            tempo_rate=self.tempo_rate,
-            pitch_semitones=self.pitch_semitones,
-            stems_to_build=set(),
-            include_mix=True,
-            base_stems=dict(self.current_stem_data),
-            base_mix=self.current_mix_data,
-            base_reverb_mix=self.current_reverb_mix_data,
-            build_reverb=True,
-            mark_missing=False,
-            log_callback=log_callback,
-            progress_callback=progress_callback,
+        self.ensure_selection_ready(
+            log_callback=log_callback, progress_callback=progress_callback
         )
 
     def request_tempo_pitch_change(
@@ -544,6 +549,7 @@ class AudioSession:
             base_stems={},
             base_mix=None,
             base_reverb_mix=None,
+            base_reverb_stems={},
             build_reverb=self.reverb_enabled,
             mark_missing=True,
             log_callback=log_callback,
@@ -569,26 +575,35 @@ class AudioSession:
                 name for name in self.active_stems if name in self.original_stem_data
             }
 
-        if self.reverb_enabled:
-            include_mix = include_mix or (self.original_mix is not None and self.original_mix.size > 0)
-
         missing_stems = required_stems - set(self.current_stem_data.keys())
-        mix_missing = include_mix and (
-            self.current_mix_data is None
-            or (self.reverb_enabled and self.current_reverb_mix_data is None)
+        missing_reverb_stems: Set[str] = set()
+        if self.reverb_enabled and not self.play_all:
+            missing_reverb_stems = {
+                name for name in required_stems if name not in self.current_reverb_stem_data
+            }
+
+        mix_missing = include_mix and self.current_mix_data is None
+        mix_reverb_missing = (
+            self.reverb_enabled and self.play_all and self.current_reverb_mix_data is None
         )
 
-        if not missing_stems and not mix_missing:
+        if (
+            not missing_stems
+            and not mix_missing
+            and not missing_reverb_stems
+            and not mix_reverb_missing
+        ):
             return
 
         self._queue_build(
             tempo_rate=self.tempo_rate,
             pitch_semitones=self.pitch_semitones,
-            stems_to_build=missing_stems,
-            include_mix=mix_missing,
+            stems_to_build=missing_stems | missing_reverb_stems,
+            include_mix=mix_missing or mix_reverb_missing,
             base_stems=dict(self.current_stem_data),
             base_mix=self.current_mix_data,
             base_reverb_mix=self.current_reverb_mix_data,
+            base_reverb_stems=dict(self.current_reverb_stem_data),
             build_reverb=self.reverb_enabled,
             mark_missing=True,
             log_callback=log_callback,
@@ -624,12 +639,14 @@ class AudioSession:
             self.pitch_semitones = self.pending_pitch_semitones
             self.total_samples = new_total_samples
             self.current_reverb_mix_data = self.pending_reverb_mix_data
+            self.current_reverb_stem_data = dict(self.pending_reverb_stem_data)
             self.current_missing_stems = set(self.pending_missing_stems)
 
             # Clear pending
             self.pending_stem_data = {}
             self.pending_mix_data = None
             self.pending_reverb_mix_data = None
+            self.pending_reverb_stem_data = {}
             self.pending_missing_stems = set()
             self.pending_total_samples = 0
             self.pending_ready = False
@@ -706,16 +723,27 @@ class AudioSession:
                     continue
                 dry_mix[:segment.size] += segment
 
-        if self.reverb_enabled and self.current_reverb_mix_data is not None:
+        if self.reverb_enabled:
             wet = np.zeros(frames, dtype="float32")
-            wet_segment = self.current_reverb_mix_data[start:start + frames]
-            if wet_segment.size > 0:
-                wet[:wet_segment.size] += wet_segment
+            if self.play_all and self.current_reverb_mix_data is not None:
+                wet_segment = self.current_reverb_mix_data[start:start + frames]
+                if wet_segment.size > 0:
+                    wet[:wet_segment.size] += wet_segment
+            elif not self.play_all:
+                for name in list(self.active_stems):
+                    data = self.current_reverb_stem_data.get(name)
+                    if data is None:
+                        continue
+                    segment = data[start:start + frames]
+                    if segment.size == 0:
+                        continue
+                    wet[:segment.size] += segment
 
-            balance = max(-1.0, min(self.reverb_balance, 1.0))
-            wet_weight = (1.0 + balance) / 2.0
-            dry_weight = 1.0 - wet_weight
-            return dry_mix * dry_weight + wet * wet_weight
+            if np.any(wet):
+                balance = max(-1.0, min(self.reverb_balance, 1.0))
+                wet_weight = (1.0 + balance) / 2.0
+                dry_weight = 1.0 - wet_weight
+                return dry_mix * dry_weight + wet * wet_weight
 
         return dry_mix
 
