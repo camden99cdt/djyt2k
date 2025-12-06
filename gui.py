@@ -1069,7 +1069,7 @@ class YTDemucsApp:
         speed_slider.grid(row=4, column=1, columnspan=4, sticky="ew", pady=(5, 0))
         speed_slider.bind("<ButtonRelease-1>", self.on_speed_release)
 
-        # pitch (row 5) – semitones, -3..+3, 0.5 steps
+        # pitch (row 5) – semitones, -6..+6, 1.0 steps
         self.pitch_var = tk.DoubleVar(value=0.0)
         initial_pitch = 0.0
         self.pitch_label = ttk.Label(
@@ -1080,8 +1080,8 @@ class YTDemucsApp:
 
         pitch_slider = ttk.Scale(
             self.player_frame,
-            from_=-3.0,
-            to=3.0,
+            from_=-6.0,
+            to=6.0,
             orient="horizontal",
             variable=self.pitch_var,
             command=self.on_pitch_drag,
@@ -1450,10 +1450,10 @@ class YTDemucsApp:
     @staticmethod
     def snap_pitch(v: float) -> float:
         """
-        Quantize to 0.5 semitone steps between -3 and +3.
+        Quantize to 1.0 semitone steps between -6 and +6.
         """
-        snapped = round(v * 2.0) / 2.0
-        return max(-3.0, min(3.0, snapped))
+        snapped = round(v)
+        return max(-6.0, min(6.0, snapped))
 
     def on_pitch_drag(self, value: str):
         if self.pitch_label is None or self.pitch_var is None:

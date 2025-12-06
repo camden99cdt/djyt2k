@@ -132,7 +132,7 @@ class StemAudioPlayer:
             return
 
         rate = max(0.25, min(float(rate), 2.0))
-        semitones = max(-3.0, min(float(semitones), 3.0))
+        semitones = max(-6.0, min(float(semitones), 6.0))
 
         self.session.request_tempo_pitch_change(
             new_tempo_rate=rate,
@@ -146,12 +146,12 @@ class StemAudioPlayer:
 
     def set_pitch_semitones(self, semitones: float):
         """
-        Request a new pitch (-3..+3 st). Tempo stays the same.
+        Request a new pitch (-6..+6 st). Tempo stays the same.
         """
         if self.session.sample_rate is None:
             return
 
-        semitones = max(-3.0, min(float(semitones), 3.0))
+        semitones = max(-6.0, min(float(semitones), 6.0))
 
         self.session.request_tempo_pitch_change(
             new_tempo_rate=self.session.tempo_rate,
