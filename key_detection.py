@@ -78,9 +78,9 @@ def _determine_key(major_correlations, minor_correlations):
     minor_key = int(np.argmax(minor_correlations))
 
     if max(major_correlations) > max(minor_correlations):
-        return chroma_labels[major_key], "Major"
+        return chroma_labels[major_key], "Maj"
     else:
-        return chroma_labels[minor_key], "Minor"
+        return chroma_labels[minor_key], "min"
 
 
 def detect_key_string(audio_path: str, log_callback=None) -> str | None:
