@@ -440,6 +440,8 @@ class YTDemucsApp:
         self.url_entry.bind("<KeyRelease>", self.on_url_keypress)
         self.url_entry.bind("<FocusOut>", self.on_url_focus_out)
 
+        self.update_player_frame_visibility()
+
     # ---------- session metadata ----------
 
     def has_active_session(self) -> bool:
@@ -1092,13 +1094,20 @@ class YTDemucsApp:
         return filtered
 
     def on_tab_changed(self, event=None):
-        selected_tab = self.notebook.select()
-        if selected_tab == str(self.sessions_tab):
-            if self.player_frame.winfo_manager():
-                self.player_frame.grid_remove()
-        else:
+        self.update_player_frame_visibility()
+
+    def update_player_frame_visibility(self):
+        should_show_player = (
+            self.has_active_session()
+            and self.notebook.select() == str(self.playback_tab)
+        )
+
+        if should_show_player:
             if not self.player_frame.winfo_manager():
                 self.player_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        else:
+            if self.player_frame.winfo_manager():
+                self.player_frame.grid_remove()
 
     def update_save_button_state(self):
         if self.selected_saved_session_id:
@@ -1500,6 +1509,8 @@ class YTDemucsApp:
         self.update_waveform_from_selection()
         self.draw_waveform()
 
+        self.update_player_frame_visibility()
+
     # ---------- waveform logic ----------
 
     def on_waveform_configure(self, event):
@@ -1704,6 +1715,7 @@ class YTDemucsApp:
         self.set_playback_controls_state(False)
         self.update_key_table()
         self.update_save_button_state()
+        self.update_player_frame_visibility()
 
     def on_reset_playback(self):
         """

@@ -26,14 +26,29 @@ def run_demucs(audio_path: str, session_dir: str, log_callback=None) -> str:
     ]
     _log(log_callback, "Running: " + " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True)
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
     except FileNotFoundError as e:
         raise RuntimeError(
             "demucs not found. Install with `pip install demucs` "
             "and ensure the `demucs` command is in PATH."
         ) from e
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"demucs failed with exit code {e.returncode}") from e
+
+    assert process.stdout is not None
+    try:
+        for line in process.stdout:
+            _log(log_callback, line.rstrip())
+    finally:
+        process.stdout.close()
+
+    retcode = process.wait()
+    if retcode != 0:
+        raise RuntimeError(f"demucs failed with exit code {retcode}")
 
     separated_root = os.path.join(session_dir, "separated")
     if os.path.isdir(separated_root):
