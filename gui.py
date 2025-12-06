@@ -803,7 +803,7 @@ class YTDemucsApp:
     def update_save_button_state(self):
         if self.selected_saved_session_id:
             self.save_delete_button.config(text="Delete Session", state="normal")
-        elif self.current_pipeline_result and self.current_pipeline_result.stems_dir:
+        elif self.current_pipeline_result:
             self.save_delete_button.config(text="Save Session", state="normal")
         else:
             self.save_delete_button.config(text="Save Session", state="disabled")
@@ -832,8 +832,8 @@ class YTDemucsApp:
 
     def save_current_session(self):
         result = self.current_pipeline_result
-        if not result or not result.stems_dir:
-            messagebox.showinfo("Save Session", "A separated session is required to save.")
+        if not result:
+            messagebox.showinfo("Save Session", "No session available to save.")
             return
 
         def worker():
