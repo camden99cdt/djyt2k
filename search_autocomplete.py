@@ -336,12 +336,14 @@ class SearchAutocomplete:
 
         self.set_selection(0)
         self.dropdown.update_idletasks()
-        height = sum(f.winfo_height() for f in self.result_frames) + 4
-        # If Tk hasn't fully realized the widgets yet, fall back to a
-        # generous per-row estimate so the dropdown isn't clipped.
-        if height <= 5:
-            estimated_row_height = 78
-            height = len(self.result_frames) * estimated_row_height + 8
+        measured_height = sum(f.winfo_height() for f in self.result_frames) + 4
+        requested_height = self.dropdown.winfo_reqheight()
+        estimated_height = len(self.result_frames) * 92 + 12
+
+        # Use the largest value among the measured layout, Tk's requested size,
+        # and a generous estimate so the dropdown is tall enough even before
+        # geometry information stabilizes.
+        height = max(measured_height, requested_height, estimated_height)
         width = self.entry.winfo_width()
         x = self.entry.winfo_rootx()
         y = self.entry.winfo_rooty() + self.entry.winfo_height()
