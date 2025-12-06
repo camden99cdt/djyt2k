@@ -2,6 +2,8 @@ bug: when seek reaches end of track, play/pause button still reads 'pause' and n
 
 feature: add a mute button - clicking on the volume % mutes the track, clicking again unmutes
 
+change: change the pitch shifter to work in semitones, rather than half semitones. change the range of the sider to -6 to +6.
+
 feature: display the demucs separation progress that's normally displayed in the stdout in the log
 
 feature: tabs - change the area above the playback visualiser to a tabbed interface
