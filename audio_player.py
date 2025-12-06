@@ -38,6 +38,8 @@ class StemAudioPlayer:
         self.render_progress_callback = None
 
         self.master_volume: float = 1.0
+        self.gain_db: float = 0.0
+        self.output_level: float = 0.0
 
         self.play_index: int = 0
         self.is_playing: bool = False
@@ -168,6 +170,12 @@ class StemAudioPlayer:
     def set_master_volume(self, volume: float):
         self.master_volume = max(0.0, min(float(volume), 1.0))
 
+    def set_gain_db(self, gain_db: float):
+        self.gain_db = max(-6.0, min(float(gain_db), 6.0))
+
+    def get_output_level(self) -> float:
+        return self.output_level
+
     # ---------- playback engine ----------
 
     def _ensure_engine(self):
@@ -185,6 +193,7 @@ class StemAudioPlayer:
         Called by the PlaybackEngine (sounddevice callback).
         """
         if not self.is_playing or self.is_paused:
+            self.output_level = 0.0
             return np.zeros(frames, dtype="float32")
 
         # 1) If a pending tempo/pitch config is ready, swap it in
@@ -198,6 +207,7 @@ class StemAudioPlayer:
         n = chunk.size
         if n == 0:
             self.is_playing = False
+            self.output_level = 0.0
             return np.zeros(frames, dtype="float32")
 
         self.play_index += n
@@ -205,7 +215,12 @@ class StemAudioPlayer:
             self.is_playing = False
 
         # Apply master volume and clip
-        chunk = chunk * self.master_volume
+        gain = 10 ** (self.gain_db / 20.0)
+        chunk = chunk * self.master_volume * gain
+        try:
+            self.output_level = float(np.sqrt(np.mean(np.square(chunk))))
+        except Exception:
+            self.output_level = 0.0
         np.clip(chunk, -1.0, 1.0, out=chunk)
 
         # Pad if shorter than requested

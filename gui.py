@@ -1,4 +1,5 @@
 # gui.py
+import math
 import os
 import threading
 import urllib.request
@@ -39,92 +40,144 @@ class YTDemucsApp:
         self.root.protocol("WM_DELETE_WINDOW", self.close_window)
         self.setup_menubar()
 
+        self.style = ttk.Style(self.root)
+        self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
+        self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
+
         # ---------- layout ----------
         container = ttk.Frame(root)
         container.grid(row=0, column=0, sticky="nsew")
 
-        self.sidebar_frame = ttk.Frame(container, padding=(10, 10))
-        self.sidebar_frame.grid(row=0, column=0, sticky="nsw")
-
         main_frame = ttk.Frame(container, padding=10)
-        main_frame.grid(row=0, column=1, sticky="nsew")
+        main_frame.grid(row=0, column=0, sticky="nsew")
 
-        self.thumbnail_label = tk.Label(
-            main_frame,
-            text="No\nthumbnail",
-            justify="center"
-        )
-        self.thumbnail_label.grid(row=0, column=0, rowspan=3, sticky="nsew", padx=(0, 10))
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.grid(row=0, column=0, sticky="nsew")
 
-        ttk.Label(main_frame, text="YouTube URL:").grid(row=0, column=1, sticky="w")
+        self.youtube_tab = ttk.Frame(self.notebook, padding=10)
+        self.playback_tab = ttk.Frame(self.notebook, padding=10)
+        self.sessions_tab = ttk.Frame(self.notebook, padding=10)
+        self.camelot_tab = ttk.Frame(self.notebook, padding=10)
+
+        self.notebook.add(self.youtube_tab, text="YouTube")
+        self.notebook.add(self.playback_tab, text="Playback")
+        self.notebook.add(self.sessions_tab, text="Sessions")
+        self.notebook.add(self.camelot_tab, text="Camelot")
+
+        ttk.Label(self.youtube_tab, text="YouTube URL:").grid(row=0, column=0, sticky="w")
         self.url_var = tk.StringVar()
-        self.url_entry = ttk.Entry(main_frame, textvariable=self.url_var, width=60)
-        self.url_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(0, 5))
+        self.url_entry = ttk.Entry(self.youtube_tab, textvariable=self.url_var, width=60)
+        self.url_entry.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 5))
 
-        # Button + skip separation checkbox
         self.start_button = ttk.Button(
-            main_frame, text="Download & Separate", command=self.on_start
+            self.youtube_tab, text="Download & Separate", command=self.on_start
         )
-        self.start_button.grid(row=2, column=1, sticky="w")
+        self.start_button.grid(row=2, column=0, sticky="w")
 
         self.skip_sep_var = tk.BooleanVar(value=False)
         self.skip_sep_cb = ttk.Checkbutton(
-            main_frame,
+            self.youtube_tab,
             text="Skip separation",
             variable=self.skip_sep_var,
         )
-        self.skip_sep_cb.grid(row=2, column=2, sticky="w")
+        self.skip_sep_cb.grid(row=2, column=1, sticky="w")
 
         self.status_var = tk.StringVar(value="Idle")
-        self.status_label = ttk.Label(main_frame, textvariable=self.status_var)
-        self.status_label.grid(row=2, column=3, sticky="e")
+        self.status_label = ttk.Label(self.youtube_tab, textvariable=self.status_var)
+        self.status_label.grid(row=2, column=2, sticky="e")
 
-        ttk.Label(main_frame, text="Log:").grid(row=3, column=0, sticky="w", pady=(10, 0))
-        self.log_text = tk.Text(main_frame, height=15, width=80, state="disabled")
-        self.log_text.grid(row=4, column=0, columnspan=4, sticky="nsew")
+        ttk.Label(self.youtube_tab, text="Log:").grid(row=3, column=0, sticky="w", pady=(10, 0))
+        self.log_text = tk.Text(self.youtube_tab, height=15, width=80, state="disabled")
+        self.log_text.grid(row=4, column=0, columnspan=3, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(
-            main_frame, orient="vertical", command=self.log_text.yview
+            self.youtube_tab, orient="vertical", command=self.log_text.yview
         )
-        scrollbar.grid(row=4, column=4, sticky="ns")
+        scrollbar.grid(row=4, column=3, sticky="ns")
         self.log_text["yscrollcommand"] = scrollbar.set
 
-        self.player_frame = ttk.Frame(main_frame)
-        self.player_frame.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+        playback_top = ttk.Frame(self.playback_tab)
+        playback_top.grid(row=0, column=0, sticky="nsew")
+        playback_top.columnconfigure(1, weight=1)
 
-        # Sidebar with saved sessions
-        ttk.Label(self.sidebar_frame, text="Saved Sessions").grid(row=0, column=0, sticky="w")
+        self.thumbnail_label = ttk.Label(
+            playback_top,
+            text="No\nthumbnail",
+            justify="center",
+            style="DisabledPlayback.TLabel",
+        )
+        self.thumbnail_label.grid(row=0, column=0, rowspan=3, sticky="nsew", padx=(0, 10))
+
+        meter_frame = ttk.Frame(playback_top)
+        meter_frame.grid(row=0, column=1, sticky="ew")
+        meter_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(meter_frame, text="Output Level").grid(row=0, column=0, sticky="w")
+        self.audio_meter = ttk.Progressbar(
+            meter_frame,
+            mode="determinate",
+            maximum=1.0,
+            value=0.0,
+            length=220,
+        )
+        self.audio_meter.grid(row=0, column=1, sticky="ew", padx=(5, 0))
+        self.audio_meter_label = ttk.Label(meter_frame, text="-∞ dB", style="DisabledPlayback.TLabel")
+        self.audio_meter_label.grid(row=0, column=2, sticky="e", padx=(5, 0))
+
+        self.gain_var = tk.DoubleVar(value=0.0)
+        self.gain_label = ttk.Label(meter_frame, text="+0.0 dB", style="DisabledPlayback.TLabel")
+        self.gain_label.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.gain_slider = ttk.Scale(
+            meter_frame,
+            from_=-6.0,
+            to=6.0,
+            orient="horizontal",
+            variable=self.gain_var,
+            command=self.on_gain_change,
+            length=280,
+        )
+        self.gain_slider.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
+
+        ttk.Label(self.sessions_tab, text="Saved Sessions").grid(row=0, column=0, sticky="w")
         self.saved_sessions_listbox = tk.Listbox(
-            self.sidebar_frame,
+            self.sessions_tab,
             height=20,
             exportselection=False,
         )
         saved_scrollbar = ttk.Scrollbar(
-            self.sidebar_frame, orient="vertical", command=self.saved_sessions_listbox.yview
+            self.sessions_tab, orient="vertical", command=self.saved_sessions_listbox.yview
         )
         self.saved_sessions_listbox.configure(yscrollcommand=saved_scrollbar.set)
         self.saved_sessions_listbox.grid(row=1, column=0, sticky="nsew")
         saved_scrollbar.grid(row=1, column=1, sticky="ns")
 
         self.save_delete_button = ttk.Button(
-            self.sidebar_frame,
+            self.sessions_tab,
             text="Save Session",
             command=self.on_save_or_delete,
             state="disabled",
         )
         self.save_delete_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
-        self.sidebar_frame.rowconfigure(1, weight=1)
-        self.sidebar_frame.columnconfigure(0, weight=1)
+        self.camelot_canvas = tk.Canvas(self.camelot_tab, width=380, height=380, highlightthickness=0)
+        self.camelot_canvas.grid(row=0, column=0, sticky="nsew")
+
+        self.player_frame = ttk.Frame(main_frame)
+        self.player_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
 
         root.rowconfigure(0, weight=1)
         root.columnconfigure(0, weight=1)
-        container.columnconfigure(1, weight=1)
+        container.columnconfigure(0, weight=1)
         container.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(4, weight=1)
-        for c in range(4):
-            main_frame.columnconfigure(c, weight=0)
-        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        self.youtube_tab.rowconfigure(4, weight=1)
+        for c in range(3):
+            self.youtube_tab.columnconfigure(c, weight=1)
+        self.playback_tab.columnconfigure(0, weight=1)
+        self.sessions_tab.rowconfigure(1, weight=1)
+        self.sessions_tab.columnconfigure(0, weight=1)
 
         # ---------- GUI state ----------
         self.saved_session_store = SavedSessionStore()
@@ -150,6 +203,13 @@ class YTDemucsApp:
         self.render_progress_label_var: tk.StringVar | None = None
         self.render_progress_bar: ttk.Progressbar | None = None
         self.render_progress_label: ttk.Label | None = None
+        self.playback_control_widgets: list[tk.Widget] = [self.audio_meter, self.gain_slider]
+        self.playback_label_widgets: list[ttk.Label] = [
+            self.audio_meter_label,
+            self.gain_label,
+            self.thumbnail_label,
+        ]
+        self.playback_enabled = False
 
         self.waveform_points: list[float] = []
         self.waveform_duration: float = 0.0
@@ -186,6 +246,9 @@ class YTDemucsApp:
 
         # periodic UI updates
         self.root.after(100, self.update_playback_ui)
+
+        self.set_playback_controls_state(False)
+        self.draw_camelot_wheel()
 
         YTDemucsApp.instances.append(self)
 
@@ -286,6 +349,39 @@ class YTDemucsApp:
             self.start_button.configure(state="disabled" if running else "normal")
             self.skip_sep_cb.configure(state="disabled" if running else "normal")
         self.root.after(0, _set)
+
+    def set_playback_controls_state(self, enabled: bool):
+        self.playback_enabled = enabled
+        state = "normal" if enabled else "disabled"
+        label_style = "TLabel" if enabled else "DisabledPlayback.TLabel"
+        frame_style = "TFrame" if enabled else "DisabledPlayback.TFrame"
+
+        try:
+            self.playback_tab.configure(style=frame_style)
+        except tk.TclError:
+            pass
+
+        for widget in self.playback_control_widgets:
+            if widget is None:
+                continue
+            try:
+                widget.state(["!disabled"] if enabled else ["disabled"])
+            except Exception:
+                try:
+                    widget.configure(state=state)
+                except Exception:
+                    pass
+
+        for label in self.playback_label_widgets:
+            if label is None:
+                continue
+            try:
+                label.configure(style=label_style)
+            except Exception:
+                try:
+                    label.configure(state=state)
+                except Exception:
+                    pass
 
     # ---------- search suggestions ----------
 
@@ -759,6 +855,8 @@ class YTDemucsApp:
 
         self.waveform_duration = self.player.get_duration()
 
+        self.set_playback_controls_state(True)
+
         # waveform canvas
         self.wave_canvas = tk.Canvas(
             self.player_frame,
@@ -1122,6 +1220,12 @@ class YTDemucsApp:
 
         self.thumbnail_image = None
         self.thumbnail_label.configure(image="", text="No\nthumbnail")
+        self.gain_var.set(0.0)
+        self.gain_label.config(text="+0.0 dB")
+        self.audio_meter.configure(value=0.0)
+        self.audio_meter_label.config(text="-∞ dB")
+        self.player.set_gain_db(0.0)
+        self.set_playback_controls_state(False)
         self.update_save_button_state()
 
     def on_reset_playback(self):
@@ -1136,6 +1240,8 @@ class YTDemucsApp:
             self.speed_var.set(1.0)
         if self.pitch_var is not None:
             self.pitch_var.set(0.0)
+        if self.gain_var is not None:
+            self.gain_var.set(0.0)
 
         # labels
         if self.volume_label is not None:
@@ -1144,10 +1250,13 @@ class YTDemucsApp:
             self.speed_label.config(text="1.00x")
         if self.pitch_label is not None:
             self.pitch_label.config(text=self.format_pitch_label(0.0))
+        if self.gain_label is not None:
+            self.gain_label.config(text="+0.0 dB")
 
         # audio engine
         self.player.set_master_volume(1.0)
         self.player.set_tempo_and_pitch(1.0, 0.0)
+        self.player.set_gain_db(0.0)
 
         # refresh duration & waveform
         self.waveform_duration = self.player.get_duration()
@@ -1261,6 +1370,39 @@ class YTDemucsApp:
         self.update_waveform_from_selection()
         self.draw_waveform()
 
+    @staticmethod
+    def snap_gain(value: float) -> float:
+        if abs(value) < 0.25:
+            return 0.0
+        return max(-6.0, min(6.0, value))
+
+    def on_gain_change(self, value: str):
+        try:
+            raw = float(value)
+        except ValueError:
+            raw = 0.0
+
+        snapped = self.snap_gain(raw)
+        if abs(snapped - raw) <= 0.15:
+            self.gain_var.set(snapped)
+            gain = snapped
+        else:
+            gain = raw
+
+        self.player.set_gain_db(gain)
+        if self.gain_label is not None:
+            self.gain_label.config(text=f"{gain:+.1f} dB")
+
+    def on_gain_release(self, event):
+        if self.gain_var is None:
+            return
+        value = float(self.gain_var.get())
+        snapped = self.snap_gain(value)
+        self.gain_var.set(snapped)
+        self.player.set_gain_db(snapped)
+        if self.gain_label is not None:
+            self.gain_label.config(text=f"{snapped:+.1f} dB")
+
 
     def on_stem_toggle(self):
         if self.all_var is not None:
@@ -1333,6 +1475,17 @@ class YTDemucsApp:
                 total_str = self.format_time(duration)
                 self.time_label.config(text=f"{elapsed_str} / {total_str}")
 
+            level = self.player.get_output_level()
+            if self.audio_meter is not None:
+                self.audio_meter.configure(value=max(0.0, min(level, 1.0)))
+            if self.audio_meter_label is not None:
+                if level <= 1e-6:
+                    db_text = "-∞ dB"
+                else:
+                    db = max(-60.0, 20 * math.log10(level))
+                    db_text = f"{db:.1f} dB"
+                self.audio_meter_label.config(text=db_text)
+
             self.draw_cursor()
         finally:
             self.root.after(100, self.update_playback_ui)
@@ -1388,3 +1541,105 @@ class YTDemucsApp:
         new_key_text = f"{new_tonic} {mode_raw}"
 
         return f"{pitch_part} |  {new_key_text}"
+
+    def draw_camelot_wheel(self):
+        if self.camelot_canvas is None:
+            return
+
+        self.camelot_canvas.delete("all")
+        self.camelot_canvas.configure(bg="#111111")
+
+        center = 190
+        outer_radius = 170
+        inner_radius = 110
+        text_radius_outer = outer_radius - 20
+        text_radius_inner = inner_radius - 18
+        outer_labels = [
+            "1B",
+            "2B",
+            "3B",
+            "4B",
+            "5B",
+            "6B",
+            "7B",
+            "8B",
+            "9B",
+            "10B",
+            "11B",
+            "12B",
+        ]
+        inner_labels = [
+            "1A",
+            "2A",
+            "3A",
+            "4A",
+            "5A",
+            "6A",
+            "7A",
+            "8A",
+            "9A",
+            "10A",
+            "11A",
+            "12A",
+        ]
+        palette_outer = ["#1e88e5", "#43a047", "#fdd835", "#e53935"]
+        palette_inner = ["#3949ab", "#00897b", "#fb8c00", "#8e24aa"]
+
+        for idx, label in enumerate(outer_labels):
+            start = -90 + idx * 30
+            color = palette_outer[idx % len(palette_outer)]
+            self.camelot_canvas.create_arc(
+                center - outer_radius,
+                center - outer_radius,
+                center + outer_radius,
+                center + outer_radius,
+                start=start,
+                extent=30,
+                fill=color,
+                outline="white",
+                width=1,
+            )
+            angle = math.radians(start + 15)
+            x = center + text_radius_outer * math.cos(angle)
+            y = center + text_radius_outer * math.sin(angle)
+            self.camelot_canvas.create_text(
+                x,
+                y,
+                text=label,
+                fill="white",
+                font=("TkDefaultFont", 12, "bold"),
+            )
+
+        for idx, label in enumerate(inner_labels):
+            start = -90 + idx * 30
+            color = palette_inner[idx % len(palette_inner)]
+            self.camelot_canvas.create_arc(
+                center - inner_radius,
+                center - inner_radius,
+                center + inner_radius,
+                center + inner_radius,
+                start=start,
+                extent=30,
+                fill=color,
+                outline="white",
+                width=1,
+            )
+            angle = math.radians(start + 15)
+            x = center + text_radius_inner * math.cos(angle)
+            y = center + text_radius_inner * math.sin(angle)
+            self.camelot_canvas.create_text(
+                x,
+                y,
+                text=label,
+                fill="white",
+                font=("TkDefaultFont", 11),
+            )
+
+        self.camelot_canvas.create_oval(
+            center - inner_radius + 8,
+            center - inner_radius + 8,
+            center + inner_radius - 8,
+            center + inner_radius - 8,
+            fill="#111111",
+            outline="white",
+        )
