@@ -2,12 +2,7 @@
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from io import BytesIO
-import subprocess
-import urllib.request
-import json
 
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -17,6 +12,7 @@ from PIL import Image, ImageTk
 from audio_player import StemAudioPlayer
 from pipeline import PipelineResult, PipelineRunner
 from saved_sessions import SavedSession, SavedSessionStore
+from youtube_search import SearchResult, fetch_search_results
 
 CHROMA_LABELS = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -30,15 +26,6 @@ FLAT_TO_SHARP = {
     "Ab": "G#",
     "Bb": "A#",
 }
-
-@dataclass
-class SearchResult:
-    title: str
-    url: str
-    duration: str
-    published: str
-    thumbnail_bytes: bytes | None
-
 
 class YTDemucsApp:
     instances: list["YTDemucsApp"] = []
@@ -353,137 +340,8 @@ class YTDemucsApp:
                 results = []
             self.root.after(0, lambda: self.on_search_results(request_id, query, results))
 
-        future = self.search_executor.submit(self.fetch_search_results, query)
+        future = self.search_executor.submit(fetch_search_results, query)
         future.add_done_callback(callback)
-
-    def fetch_search_results(self, query: str) -> list[SearchResult]:
-        cmd = [
-            "yt-dlp",
-            "--flat-playlist",
-            "--dump-json",
-            "--extractor-args",
-            "youtubetab:approximate_date",
-            f"ytsearch5:{query}",
-        ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=30,
-            )
-        except Exception:
-            return []
-
-        results: list[SearchResult] = []
-        for line in proc.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            url = data.get("webpage_url") or data.get("url")
-            title = data.get("title") or "Untitled"
-            duration = self.format_duration_from_seconds(data.get("duration"))
-            published = self.format_time_ago(data)
-            thumb_url = self.select_thumbnail_url(data)
-            thumb_bytes = self.fetch_thumbnail_bytes(thumb_url) if thumb_url else None
-
-            if url:
-                results.append(
-                    SearchResult(
-                        title=title,
-                        url=url,
-                        duration=duration,
-                        published=published,
-                        thumbnail_bytes=thumb_bytes,
-                    )
-                )
-
-            if len(results) >= 5:
-                break
-
-        return results
-
-    @staticmethod
-    def select_thumbnail_url(data: dict) -> str | None:
-        if not isinstance(data, dict):
-            return None
-
-        thumbs = data.get("thumbnails")
-        if isinstance(thumbs, list):
-            for entry in thumbs:
-                if not isinstance(entry, dict):
-                    continue
-                url = entry.get("url") or entry.get("thumbnail")
-                if url:
-                    return url
-
-        thumb_url = data.get("thumbnail")
-        if thumb_url:
-            return thumb_url
-
-        return None
-
-    @staticmethod
-    def format_duration_from_seconds(seconds) -> str:
-        try:
-            seconds = int(seconds)
-        except (TypeError, ValueError):
-            return "--:--"
-        m, s = divmod(seconds, 60)
-        h, m = divmod(m, 60)
-        if h:
-            return f"{h:d}:{m:02d}:{s:02d}"
-        return f"{m:02d}:{s:02d}"
-
-    @staticmethod
-    def format_time_ago(data: dict) -> str:
-        upload_date = data.get("upload_date") or data.get("release_date")
-        timestamp = data.get("timestamp") or data.get("release_timestamp")
-        dt: datetime | None = None
-        if upload_date:
-            try:
-                dt = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=timezone.utc)
-            except ValueError:
-                dt = None
-        elif timestamp:
-            try:
-                dt = datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
-            except (TypeError, ValueError, OSError):
-                dt = None
-
-        if not dt:
-            return ""
-
-        delta = datetime.now(tz=timezone.utc) - dt
-        days = delta.days
-        if days < 1:
-            hours = delta.seconds // 3600
-            if hours:
-                return f"{hours}h ago"
-            minutes = max(1, delta.seconds // 60)
-            return f"{minutes}m ago"
-        if days < 30:
-            return f"{days}d ago"
-        months = days // 30
-        if months < 12:
-            return f"{months}mo ago"
-        years = months // 12
-        return f"{years}y ago"
-
-    @staticmethod
-    def fetch_thumbnail_bytes(url: str) -> bytes | None:
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.read()
-        except Exception:
-            return None
 
     def on_search_results(self, request_id: int, query: str, results: list[SearchResult]):
         if request_id != self.search_request_counter:
