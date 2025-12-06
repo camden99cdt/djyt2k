@@ -517,7 +517,7 @@ class YTDemucsApp:
         clear_button.grid(row=2, column=4, pady=(5, 0), sticky="w")
 
         # master volume (row 3) – wider slider via length
-        self.volume_label = ttk.Label(self.player_frame, text="Volume: 100%")
+        self.volume_label = ttk.Label(self.player_frame, text="100%")
         self.volume_label.grid(
             row=3, column=0, sticky="w", pady=(5, 0)
         )
@@ -537,7 +537,7 @@ class YTDemucsApp:
 
         # playback speed (row 4) – snapping + wider slider
         self.speed_var = tk.DoubleVar(value=1.0)
-        self.speed_label = ttk.Label(self.player_frame, text="Speed: 1.00x")
+        self.speed_label = ttk.Label(self.player_frame, text="1.00x")
         self.speed_label.grid(row=4, column=0, sticky="w", pady=(5, 0))
 
         speed_slider = ttk.Scale(
@@ -805,9 +805,9 @@ class YTDemucsApp:
 
         # labels
         if self.volume_label is not None:
-            self.volume_label.config(text="Volume: 100%")
+            self.volume_label.config(text="100%")
         if self.speed_label is not None:
-            self.speed_label.config(text="Speed: 1.00x")
+            self.speed_label.config(text="1.00x")
         if self.pitch_label is not None:
             self.pitch_label.config(text=self.format_pitch_label(0.0))
 
@@ -875,7 +875,7 @@ class YTDemucsApp:
         else:
             v = raw_v
 
-        self.speed_label.config(text=f"Speed: {v:.2f}x")
+        self.speed_label.config(text=f"{v:.2f}x")
 
     def on_speed_release(self, event):
         if self.speed_var is None:
@@ -888,7 +888,7 @@ class YTDemucsApp:
         self.player.set_tempo_rate(v)
 
         if self.speed_label is not None:
-            self.speed_label.config(text=f"Speed: {v:.2f}x")
+            self.speed_label.config(text=f"{v:.2f}x")
 
         # optional: redraw waveform (time axis effectively changes)
         self.draw_waveform()
@@ -947,7 +947,7 @@ class YTDemucsApp:
     def on_volume_change(self, value: str):
         """
         Live volume update while dragging the slider.
-        Also keeps the 'Volume: xx%' label in sync.
+        Also keeps the 'xx%' label in sync.
         """
         try:
             v = float(value)
@@ -960,7 +960,7 @@ class YTDemucsApp:
 
         if self.volume_label is not None:
             pct = int(v * 100)
-            self.volume_label.config(text=f"Volume: {pct}%")
+            self.volume_label.config(text=f"{pct}%")
 
 
     # ---------- render progress ----------
@@ -1022,7 +1022,7 @@ class YTDemucsApp:
         No recomputation of the actual key — purely a musical transposition.
         """
         sign = "+" if semitones >= 0 else ""
-        pitch_part = f"Pitch: {sign}{semitones:.1f} st"
+        pitch_part = f"{sign}{semitones:.1f} st"
 
         base_key = self.song_key_text
         if not base_key:
@@ -1031,7 +1031,7 @@ class YTDemucsApp:
         # Parse something like "F major" or "Bb minor"
         parts = base_key.split()
         if len(parts) < 2:
-            return f"{pitch_part} | Key: {base_key}"
+            return f"{pitch_part} |  {base_key}"
 
         tonic_raw = parts[0]              # e.g. "F", "Bb"
         mode_raw = " ".join(parts[1:])    # e.g. "major", "minor"
@@ -1043,7 +1043,7 @@ class YTDemucsApp:
         try:
             base_index = CHROMA_LABELS.index(tonic)
         except ValueError:
-            return f"{pitch_part} | Key: {base_key}"
+            return f"{pitch_part} |  {base_key}"
 
         # THE IMPORTANT FIX:
         # semitones slider value *is* the number of semitone key steps.
@@ -1054,4 +1054,4 @@ class YTDemucsApp:
 
         new_key_text = f"{new_tonic} {mode_raw}"
 
-        return f"{pitch_part} | Key: {new_key_text}"
+        return f"{pitch_part} |  {new_key_text}"
