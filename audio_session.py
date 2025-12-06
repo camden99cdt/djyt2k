@@ -10,6 +10,73 @@ import soundfile as sf
 import librosa
 
 
+class SimpleReverb:
+    """
+    Lightweight Schroeder-style reverb tuned for small block sizes.
+
+    The design keeps processing cheap enough for audio callbacks while still
+    giving a noticeably deep tail by combining a few comb filters with a short
+    all-pass cascade. Each stem/mix keeps its own instance so the wet path only
+    contains sources that are currently audible.
+    """
+
+    def __init__(self, sample_rate: int):
+        self.sample_rate = sample_rate
+        comb_times = (0.0297, 0.0371, 0.0411, 0.0437)
+        allpass_times = (0.005, 0.0017)
+
+        self.comb_feedback = 0.78
+        self.allpass_gain = 0.7
+
+        self.comb_buffers = [
+            np.zeros(max(1, int(sample_rate * t)), dtype="float32")
+            for t in comb_times
+        ]
+        self.comb_indices = [0 for _ in self.comb_buffers]
+
+        self.allpass_buffers = [
+            np.zeros(max(1, int(sample_rate * t)), dtype="float32")
+            for t in allpass_times
+        ]
+        self.allpass_indices = [0 for _ in self.allpass_buffers]
+
+    def reset(self):
+        for buf in self.comb_buffers + self.allpass_buffers:
+            buf.fill(0.0)
+        self.comb_indices = [0 for _ in self.comb_buffers]
+        self.allpass_indices = [0 for _ in self.allpass_buffers]
+
+    def process(self, input_chunk: np.ndarray) -> np.ndarray:
+        x = np.asarray(input_chunk, dtype="float32")
+        if x.size == 0:
+            return np.zeros_like(x)
+
+        y = np.zeros_like(x)
+
+        for i, sample in enumerate(x):
+            comb_sum = 0.0
+            for idx, buf in enumerate(self.comb_buffers):
+                tap = buf[self.comb_indices[idx]]
+                comb_sum += tap
+                buf[self.comb_indices[idx]] = sample + tap * self.comb_feedback
+                self.comb_indices[idx] = (self.comb_indices[idx] + 1) % buf.size
+
+            comb_avg = comb_sum / float(len(self.comb_buffers))
+
+            ap_out = comb_avg
+            for ap_idx, buf in enumerate(self.allpass_buffers):
+                buf_index = self.allpass_indices[ap_idx]
+                buf_out = buf[buf_index]
+                buf[buf_index] = ap_out + buf_out * self.allpass_gain
+                ap_out = -ap_out * self.allpass_gain + buf_out
+                self.allpass_indices[ap_idx] = (buf_index + 1) % buf.size
+
+            y[i] = ap_out
+
+        np.clip(y, -1.0, 1.0, out=y)
+        return y
+
+
 class AudioSession:
     """
     Audio/DSP core, no sounddevice.
@@ -39,6 +106,11 @@ class AudioSession:
         self.pitch_semitones: float = 0.0
         self.current_missing_stems: Set[str] = set()
         self.total_samples: int = 0  # for current config
+
+        # Reverb
+        self.reverb_enabled: bool = False
+        self.reverb_wet: float = 0.45
+        self.reverb_states: Dict[str, "SimpleReverb"] = {}
 
         # PENDING config (being built in the background for a new tempo/pitch)
         self.pending_stem_data: Dict[str, np.ndarray] = {}
@@ -188,6 +260,10 @@ class AudioSession:
 
         self.active_stems.clear()
         self.play_all = False
+
+        self.reverb_states.clear()
+        self.reverb_enabled = False
+        self.reverb_wet = 0.45
 
         with self._pending_lock:
             self.pending_stem_data = {}
@@ -417,9 +493,39 @@ class AudioSession:
 
     def set_active_stems(self, names: Set[str]):
         self.active_stems = set(names)
+        self._sync_reverb_states()
 
     def set_play_all(self, value: bool):
         self.play_all = bool(value)
+        self._sync_reverb_states()
+
+    def set_reverb_enabled(self, enabled: bool):
+        self.reverb_enabled = bool(enabled)
+        if not self.reverb_enabled:
+            for state in self.reverb_states.values():
+                state.reset()
+
+    def set_reverb_wet(self, wet: float):
+        self.reverb_wet = max(0.0, min(float(wet), 1.0))
+
+    def _sync_reverb_states(self):
+        targets = self._reverb_targets()
+        for name in list(self.reverb_states.keys()):
+            if name not in targets:
+                self.reverb_states[name].reset()
+                del self.reverb_states[name]
+
+    def _reverb_targets(self) -> Set[str]:
+        if self.play_all:
+            return {"__mix__"} if self.current_mix_data is not None else set()
+        return {name for name in self.active_stems if name in self.current_stem_data}
+
+    def _get_reverb(self, name: str) -> SimpleReverb:
+        if name not in self.reverb_states:
+            if self.sample_rate is None:
+                raise RuntimeError("Cannot build reverb without sample rate")
+            self.reverb_states[name] = SimpleReverb(self.sample_rate)
+        return self.reverb_states[name]
 
     def request_tempo_pitch_change(
         self,
@@ -609,12 +715,20 @@ class AudioSession:
             return np.zeros(frames, dtype="float32")
 
         frames = min(frames, self.total_samples - start)
-        mix = np.zeros(frames, dtype="float32")
+        dry_mix = np.zeros(frames, dtype="float32")
+
+        wet_amount = self.reverb_wet if self.reverb_enabled else 0.0
+        wet_amount = max(0.0, min(wet_amount, 1.0))
+        wet_mix = np.zeros(frames, dtype="float32") if wet_amount > 0 else None
+
+        self._sync_reverb_states()
 
         if self.play_all and self.current_mix_data is not None:
             segment = self.current_mix_data[start:start + frames]
             if segment.size > 0:
-                mix[:segment.size] += segment
+                dry_mix[:segment.size] += segment
+                if wet_mix is not None:
+                    wet_mix[:segment.size] += self._get_reverb("__mix__").process(segment)
         else:
             for name in list(self.active_stems):
                 data = self.current_stem_data.get(name)
@@ -623,9 +737,16 @@ class AudioSession:
                 segment = data[start:start + frames]
                 if segment.size == 0:
                     continue
-                mix[:segment.size] += segment
+                dry_mix[:segment.size] += segment
+                if wet_mix is not None:
+                    wet_mix[:segment.size] += self._get_reverb(name).process(segment)
 
-        return mix
+        if wet_mix is not None:
+            mixed = dry_mix * (1.0 - wet_amount) + wet_mix * wet_amount
+            np.clip(mixed, -1.0, 1.0, out=mixed)
+            return mixed
+
+        return dry_mix
 
     # -------------------------------------------------------------------------
     # DURATION

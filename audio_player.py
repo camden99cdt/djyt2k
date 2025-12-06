@@ -180,6 +180,13 @@ class StemAudioPlayer:
         self.render_progress_callback = callback
 
 
+    def set_reverb_enabled(self, enabled: bool):
+        self.session.set_reverb_enabled(enabled)
+
+    def set_reverb_wet(self, wet: float):
+        self.session.set_reverb_wet(wet)
+
+
     def set_master_volume(self, volume: float):
         self.master_volume = max(0.0, min(float(volume), 1.0))
 

@@ -336,6 +336,11 @@ class YTDemucsApp:
         self.speed_label: ttk.Label | None = None
         self.pitch_var: tk.DoubleVar | None = None
         self.pitch_label: ttk.Label | None = None
+        self.reverb_enabled_var: tk.BooleanVar | None = None
+        self.reverb_mix_var: tk.DoubleVar | None = None
+        self.reverb_checkbox: ttk.Checkbutton | None = None
+        self.reverb_mix_label: ttk.Label | None = None
+        self.reverb_mix_slider: ttk.Scale | None = None
         self.all_var: tk.BooleanVar | None = None
         self.render_progress_var: tk.DoubleVar | None = None
         self.render_progress_label_var: tk.StringVar | None = None
@@ -581,6 +586,8 @@ class YTDemucsApp:
                     label.configure(state=state)
                 except Exception:
                     pass
+
+        self.update_reverb_controls_state()
 
     # ---------- search suggestions ----------
 
@@ -1219,11 +1226,24 @@ class YTDemucsApp:
         self.speed_label = None
         self.pitch_var = None
         self.pitch_label = None
+        self.reverb_enabled_var = None
+        self.reverb_mix_var = None
+        self.reverb_checkbox = None
+        self.reverb_mix_label = None
+        self.reverb_mix_slider = None
         self.all_var = None
         self.render_progress_var = None
         self.render_progress_label_var = None
         self.render_progress_bar = None
         self.render_progress_label = None
+        self.playback_control_widgets = [self.audio_meter, self.gain_slider]
+        self.playback_label_widgets = [
+            self.audio_meter_label,
+            self.gain_label,
+            self.thumbnail_label,
+        ]
+        self.playback_label_widgets.extend(self.key_table_headers)
+        self.playback_label_widgets.extend(self.key_table_value_labels.values())
         self.waveform_points = []
         self.waveform_duration = 0.0
         self.stem_vars.clear()
@@ -1399,9 +1419,44 @@ class YTDemucsApp:
 
         self.update_key_table(self.pitch_var.get())
 
+        # Reverb (row 6)
+        self.reverb_enabled_var = tk.BooleanVar(value=True)
+        self.reverb_mix_var = tk.DoubleVar(value=0.45)
+        self.reverb_checkbox = ttk.Checkbutton(
+            self.player_frame,
+            text="Enable Reverb",
+            variable=self.reverb_enabled_var,
+            command=self.on_reverb_toggle,
+        )
+        self.reverb_checkbox.grid(row=6, column=0, pady=(5, 0), sticky="w")
+
+        self.reverb_mix_label = ttk.Label(self.player_frame, text="45% wet")
+        self.reverb_mix_label.grid(row=6, column=4, pady=(5, 0), sticky="e")
+
+        self.reverb_mix_slider = ttk.Scale(
+            self.player_frame,
+            from_=0.0,
+            to=1.0,
+            orient="horizontal",
+            variable=self.reverb_mix_var,
+            command=self.on_reverb_mix_change,
+            length=500,
+        )
+        self.reverb_mix_slider.grid(row=6, column=1, columnspan=3, sticky="ew", pady=(5, 0))
+
+        self.playback_control_widgets.extend(
+            [self.reverb_checkbox, self.reverb_mix_slider]
+        )
+        if self.reverb_mix_label is not None:
+            self.playback_label_widgets.append(self.reverb_mix_label)
+
+        self.player.set_reverb_enabled(self.reverb_enabled_var.get())
+        self.on_reverb_mix_change(str(self.reverb_mix_var.get()))
+        self.update_reverb_controls_state()
+
         # rendering progress (bottom of player area)
         ttk.Separator(self.player_frame, orient="horizontal").grid(
-            row=6,
+            row=7,
             column=0,
             columnspan=max(5, len(stem_names) + 1),
             sticky="ew",
@@ -1416,7 +1471,7 @@ class YTDemucsApp:
             mode="determinate",
         )
         self.render_progress_bar.grid(
-            row=7,
+            row=8,
             column=0,
             columnspan=4,
             sticky="ew",
@@ -1429,7 +1484,7 @@ class YTDemucsApp:
             width=28,
         )
         self.render_progress_label.grid(
-            row=7,
+            row=8,
             column=4,
             columnspan=max(1, len(stem_names) - 3),
             sticky="w",
@@ -1659,6 +1714,10 @@ class YTDemucsApp:
             self.pitch_var.set(0.0)
         if self.gain_var is not None:
             self.gain_var.set(0.0)
+        if self.reverb_enabled_var is not None:
+            self.reverb_enabled_var.set(True)
+        if self.reverb_mix_var is not None:
+            self.reverb_mix_var.set(0.45)
 
         # labels
         if self.volume_label is not None:
@@ -1669,11 +1728,16 @@ class YTDemucsApp:
             self.pitch_label.config(text=self.format_pitch_label(0.0))
         if self.gain_label is not None:
             self.gain_label.config(text="+0.0 dB")
+        if self.reverb_mix_label is not None:
+            self.reverb_mix_label.config(text="45% wet")
 
         # audio engine
         self.player.set_master_volume(1.0)
         self.player.set_tempo_and_pitch(1.0, 0.0)
         self.player.set_gain_db(0.0)
+        self.player.set_reverb_enabled(True)
+        self.player.set_reverb_wet(0.45)
+        self.update_reverb_controls_state()
 
         self.update_key_table(0.0)
 
@@ -1824,6 +1888,38 @@ class YTDemucsApp:
         self.player.set_gain_db(snapped)
         if self.gain_label is not None:
             self.gain_label.config(text=f"{snapped:+.1f} dB")
+
+    def on_reverb_toggle(self):
+        enabled = bool(self.reverb_enabled_var.get()) if self.reverb_enabled_var else False
+        self.player.set_reverb_enabled(enabled)
+        self.update_reverb_controls_state()
+
+    def on_reverb_mix_change(self, value: str):
+        try:
+            wet = float(value)
+        except ValueError:
+            wet = 0.0
+
+        wet = max(0.0, min(1.0, wet))
+        if self.reverb_mix_var is not None:
+            self.reverb_mix_var.set(wet)
+        self.player.set_reverb_wet(wet)
+        if self.reverb_mix_label is not None:
+            pct = int(round(wet * 100))
+            self.reverb_mix_label.config(text=f"{pct}% wet")
+
+    def update_reverb_controls_state(self):
+        slider_state = "disabled"
+        if self.reverb_enabled_var is not None and self.playback_enabled:
+            slider_state = "normal" if self.reverb_enabled_var.get() else "disabled"
+        if self.reverb_mix_slider is not None:
+            try:
+                self.reverb_mix_slider.state(["!disabled"] if slider_state == "normal" else ["disabled"])
+            except Exception:
+                try:
+                    self.reverb_mix_slider.configure(state=slider_state)
+                except Exception:
+                    pass
 
 
     def on_stem_toggle(self):
