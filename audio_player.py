@@ -124,6 +124,23 @@ class StemAudioPlayer:
             progress_callback=self.render_progress_callback,
         )
 
+    def set_tempo_and_pitch(self, rate: float, semitones: float):
+        """Request a combined tempo/pitch change as a single rebuild."""
+        if self.session.sample_rate is None:
+            return
+
+        rate = max(0.25, min(float(rate), 2.0))
+        semitones = max(-3.0, min(float(semitones), 3.0))
+
+        self.session.request_tempo_pitch_change(
+            new_tempo_rate=rate,
+            new_pitch_semitones=semitones,
+            target_stems=set(self.session.active_stems),
+            include_mix=self.session.play_all,
+            log_callback=getattr(self, "log_callback", None),
+            progress_callback=self.render_progress_callback,
+        )
+
 
     def set_pitch_semitones(self, semitones: float):
         """
