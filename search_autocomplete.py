@@ -263,6 +263,7 @@ class SearchAutocomplete:
 
         container = tk.Frame(self.dropdown, bg="#1f1f1f")
         container.pack(fill="both", expand=True, padx=2, pady=2)
+        container.pack_propagate(False)
 
         self.results = results
         self.result_frames = []
@@ -356,7 +357,10 @@ class SearchAutocomplete:
         width = self.entry.winfo_width()
         x = self.entry.winfo_rootx()
         y = self.entry.winfo_rooty() + self.entry.winfo_height()
+        container.configure(height=height)
         self.dropdown.geometry(f"{width}x{height}+{x}+{y}")
+        self.dropdown.minsize(width, height)
+        self.dropdown.update_idletasks()
 
     # ---------- selection + navigation ----------
     def set_selection(self, index: int):
