@@ -1319,10 +1319,11 @@ class YTDemucsApp:
         speed_slider.bind("<ButtonRelease-1>", self.on_speed_release)
 
         # pitch (row 5) – semitones, -6..+6, 1.0 steps
-        self.pitch_var = tk.DoubleVar(value=0.0)
-        initial_pitch = 0.0
+        self.pitch_var = tk.DoubleVar(value=0)
+        initial_pitch = 0
         self.pitch_label = ttk.Label(
             self.player_frame,
+            width=12,
             text=self.format_pitch_label(initial_pitch)
         )
         self.pitch_label.grid(row=5, column=0, pady=(5, 0))
@@ -1890,7 +1891,7 @@ class YTDemucsApp:
         No recomputation of the actual key — purely a musical transposition.
         """
         sign = "+" if semitones >= 0 else ""
-        pitch_part = f"{sign}{semitones:.1f} st"
+        pitch_part = f"{sign}{semitones}"
 
         current_key = self.get_current_key_text(semitones)
         if not current_key:
