@@ -12,6 +12,7 @@ from PIL import Image, ImageTk
 from audio_player import StemAudioPlayer
 from pipeline import PipelineResult, PipelineRunner
 from saved_sessions import SavedSession, SavedSessionStore
+from search_autocomplete import SearchAutocomplete
 
 CHROMA_LABELS = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -25,6 +26,7 @@ FLAT_TO_SHARP = {
     "Ab": "G#",
     "Bb": "A#",
 }
+
 
 class YTDemucsApp:
     instances: list["YTDemucsApp"] = []
@@ -180,6 +182,15 @@ class YTDemucsApp:
         self.refresh_saved_sessions_list()
         self.update_save_button_state()
 
+        # URL search autocomplete
+        self.search_autocomplete = SearchAutocomplete(
+            root=self.root,
+            entry=self.url_entry,
+            url_var=self.url_var,
+            log_callback=self.append_log,
+            on_url_selected=self.on_search_url_selected,
+        )
+
     # ---------- menu + window management ----------
 
     def setup_menubar(self):
@@ -262,6 +273,13 @@ class YTDemucsApp:
             self.start_button.configure(state="disabled" if running else "normal")
             self.skip_sep_cb.configure(state="disabled" if running else "normal")
         self.root.after(0, _set)
+
+    # ---------- search autocomplete ----------
+
+    def on_search_url_selected(self, url: str):
+        self.url_var.set(url)
+        self.url_entry.icursor(tk.END)
+        self.url_entry.selection_range(0, tk.END)
 
     # ---------- thumbnail ----------
 
