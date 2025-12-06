@@ -316,7 +316,7 @@ class YTDemucsApp:
             self.hide_search_dropdown()
             return
 
-        self.search_debounce_id = self.root.after(400, lambda t=text: self.trigger_search(t))
+        self.search_debounce_id = self.root.after(1000, lambda t=text: self.trigger_search(t))
 
     def on_url_keypress(self, event):
         if event.keysym in {"Up", "Down", "Return", "Escape"}:
@@ -359,6 +359,7 @@ class YTDemucsApp:
     def fetch_search_results(self, query: str) -> list[SearchResult]:
         cmd = [
             "yt-dlp",
+            "--flat-playlist",
             "--dump-json",
             f"ytsearch5:{query}",
         ]
