@@ -57,12 +57,10 @@ class YTDemucsApp:
         self.youtube_tab = ttk.Frame(self.notebook, padding=10)
         self.playback_tab = ttk.Frame(self.notebook, padding=10)
         self.sessions_tab = ttk.Frame(self.notebook, padding=10)
-        self.camelot_tab = ttk.Frame(self.notebook, padding=10)
 
         self.notebook.add(self.youtube_tab, text="YouTube")
         self.notebook.add(self.playback_tab, text="Playback")
         self.notebook.add(self.sessions_tab, text="Sessions")
-        self.notebook.add(self.camelot_tab, text="Camelot")
 
         ttk.Label(self.youtube_tab, text="YouTube URL:").grid(row=0, column=0, sticky="w")
         self.url_var = tk.StringVar()
@@ -129,8 +127,8 @@ class YTDemucsApp:
         self.gain_label.grid(row=1, column=0, sticky="w", pady=(8, 0))
         self.gain_slider = ttk.Scale(
             meter_frame,
-            from_=-6.0,
-            to=6.0,
+            from_=-10.0,
+            to=10.0,
             orient="horizontal",
             variable=self.gain_var,
             command=self.on_gain_change,
@@ -159,9 +157,6 @@ class YTDemucsApp:
             state="disabled",
         )
         self.save_delete_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-
-        self.camelot_canvas = tk.Canvas(self.camelot_tab, width=380, height=380, highlightthickness=0)
-        self.camelot_canvas.grid(row=0, column=0, sticky="nsew")
 
         self.player_frame = ttk.Frame(main_frame)
         self.player_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
@@ -248,8 +243,6 @@ class YTDemucsApp:
         self.root.after(100, self.update_playback_ui)
 
         self.set_playback_controls_state(False)
-        self.draw_camelot_wheel()
-
         YTDemucsApp.instances.append(self)
 
         # saved sessions UI wiring
@@ -700,6 +693,7 @@ class YTDemucsApp:
         window_title = result.title if not result.separated else f"{result.title} [sep]"
         self.root.after(0, lambda t=window_title: self.root.title(t))
         self.root.after(0, lambda: self.setup_player(result.stems_dir))
+        self.root.after(0, lambda: self.notebook.select(self.playback_tab))
         self.update_save_button_state()
 
     # ---------- saved sessions ----------
@@ -806,6 +800,7 @@ class YTDemucsApp:
         window_title = session.title
         self.root.after(0, lambda t=window_title: self.root.title(t))
         self.root.after(0, lambda: self.setup_player(session.stems_dir))
+        self.root.after(0, lambda: self.notebook.select(self.playback_tab))
         self.update_save_button_state()
 
     # ---------- player UI ----------
@@ -1374,7 +1369,7 @@ class YTDemucsApp:
     def snap_gain(value: float) -> float:
         if abs(value) < 0.25:
             return 0.0
-        return max(-6.0, min(6.0, value))
+        return max(-10.0, min(10.0, value))
 
     def on_gain_change(self, value: str):
         try:
@@ -1542,104 +1537,3 @@ class YTDemucsApp:
 
         return f"{pitch_part} |  {new_key_text}"
 
-    def draw_camelot_wheel(self):
-        if self.camelot_canvas is None:
-            return
-
-        self.camelot_canvas.delete("all")
-        self.camelot_canvas.configure(bg="#111111")
-
-        center = 190
-        outer_radius = 170
-        inner_radius = 110
-        text_radius_outer = outer_radius - 20
-        text_radius_inner = inner_radius - 18
-        outer_labels = [
-            "1B",
-            "2B",
-            "3B",
-            "4B",
-            "5B",
-            "6B",
-            "7B",
-            "8B",
-            "9B",
-            "10B",
-            "11B",
-            "12B",
-        ]
-        inner_labels = [
-            "1A",
-            "2A",
-            "3A",
-            "4A",
-            "5A",
-            "6A",
-            "7A",
-            "8A",
-            "9A",
-            "10A",
-            "11A",
-            "12A",
-        ]
-        palette_outer = ["#1e88e5", "#43a047", "#fdd835", "#e53935"]
-        palette_inner = ["#3949ab", "#00897b", "#fb8c00", "#8e24aa"]
-
-        for idx, label in enumerate(outer_labels):
-            start = -90 + idx * 30
-            color = palette_outer[idx % len(palette_outer)]
-            self.camelot_canvas.create_arc(
-                center - outer_radius,
-                center - outer_radius,
-                center + outer_radius,
-                center + outer_radius,
-                start=start,
-                extent=30,
-                fill=color,
-                outline="white",
-                width=1,
-            )
-            angle = math.radians(start + 15)
-            x = center + text_radius_outer * math.cos(angle)
-            y = center + text_radius_outer * math.sin(angle)
-            self.camelot_canvas.create_text(
-                x,
-                y,
-                text=label,
-                fill="white",
-                font=("TkDefaultFont", 12, "bold"),
-            )
-
-        for idx, label in enumerate(inner_labels):
-            start = -90 + idx * 30
-            color = palette_inner[idx % len(palette_inner)]
-            self.camelot_canvas.create_arc(
-                center - inner_radius,
-                center - inner_radius,
-                center + inner_radius,
-                center + inner_radius,
-                start=start,
-                extent=30,
-                fill=color,
-                outline="white",
-                width=1,
-            )
-            angle = math.radians(start + 15)
-            x = center + text_radius_inner * math.cos(angle)
-            y = center + text_radius_inner * math.sin(angle)
-            self.camelot_canvas.create_text(
-                x,
-                y,
-                text=label,
-                fill="white",
-                font=("TkDefaultFont", 11),
-            )
-
-        self.camelot_canvas.create_oval(
-            center - inner_radius + 8,
-            center - inner_radius + 8,
-            center + inner_radius - 8,
-            center + inner_radius - 8,
-            fill="#111111",
-            outline="white",
-        )

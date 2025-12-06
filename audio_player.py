@@ -171,7 +171,7 @@ class StemAudioPlayer:
         self.master_volume = max(0.0, min(float(volume), 1.0))
 
     def set_gain_db(self, gain_db: float):
-        self.gain_db = max(-6.0, min(float(gain_db), 6.0))
+        self.gain_db = max(-10.0, min(float(gain_db), 10.0))
 
     def get_output_level(self) -> float:
         return self.output_level
