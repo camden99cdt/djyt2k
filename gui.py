@@ -165,8 +165,8 @@ class YTDemucsApp:
             lbl.grid(row=1, column=idx, sticky="ew", pady=(4, 0))
             self.key_table_value_labels[key] = lbl
 
-        self.sessions_tab.columnconfigure(0, weight=7)
-        self.sessions_tab.columnconfigure(1, weight=3)
+        self.sessions_tab.columnconfigure(0, weight=7, uniform="sessions")
+        self.sessions_tab.columnconfigure(1, weight=3, uniform="sessions")
         self.sessions_tab.rowconfigure(1, weight=1)
 
         sessions_list_frame = ttk.Frame(self.sessions_tab)
@@ -192,20 +192,9 @@ class YTDemucsApp:
         controls_frame = ttk.Frame(self.sessions_tab)
         controls_frame.grid(row=0, column=1, rowspan=3, sticky="nsew")
         controls_frame.columnconfigure(0, weight=1)
+        controls_frame.rowconfigure(11, weight=1)
 
-        self.save_delete_button = ttk.Button(
-            controls_frame,
-            text="Save Session",
-            command=self.on_save_or_delete,
-            state="disabled",
-        )
-        self.save_delete_button.grid(row=0, column=0, sticky="ew")
-
-        ttk.Separator(controls_frame, orient="horizontal").grid(
-            row=1, column=0, sticky="ew", pady=10
-        )
-
-        ttk.Label(controls_frame, text="Sort by:").grid(row=2, column=0, sticky="w")
+        ttk.Label(controls_frame, text="Sort by:").grid(row=0, column=0, sticky="w")
         self.sort_var = tk.StringVar(value="newest")
         self.sort_options = [
             ("Oldest first", "oldest"),
@@ -221,19 +210,19 @@ class YTDemucsApp:
             values=[label for label, _ in self.sort_options],
             textvariable=self.sort_dropdown_var,
         )
-        self.sort_dropdown.grid(row=3, column=0, sticky="ew", pady=(2, 0))
+        self.sort_dropdown.grid(row=1, column=0, sticky="ew", pady=(2, 0))
         self.sort_dropdown.bind("<<ComboboxSelected>>", lambda _e: self.on_sort_selection())
 
         ttk.Separator(controls_frame, orient="horizontal").grid(
-            row=4, column=0, sticky="ew", pady=10
+            row=2, column=0, sticky="ew", pady=10
         )
 
-        ttk.Label(controls_frame, text="Filters").grid(row=5, column=0, sticky="w")
+        ttk.Label(controls_frame, text="Filters").grid(row=3, column=0, sticky="w")
 
-        ttk.Label(controls_frame, text="Search:").grid(row=6, column=0, sticky="w")
+        ttk.Label(controls_frame, text="Search:").grid(row=4, column=0, sticky="w")
         self.search_var = tk.StringVar()
         search_entry = ttk.Entry(controls_frame, textvariable=self.search_var)
-        search_entry.grid(row=7, column=0, sticky="ew")
+        search_entry.grid(row=5, column=0, sticky="ew")
         self.search_var.trace_add("write", lambda *_: self.refresh_saved_sessions_list())
 
         self.mixable_var = tk.BooleanVar(value=False)
@@ -243,10 +232,10 @@ class YTDemucsApp:
             variable=self.mixable_var,
             command=self.refresh_saved_sessions_list,
         )
-        mixable_cb.grid(row=8, column=0, sticky="w", pady=(8, 2))
+        mixable_cb.grid(row=6, column=0, sticky="w", pady=(8, 2))
 
         mixable_key_row = ttk.Frame(controls_frame)
-        mixable_key_row.grid(row=9, column=0, sticky="ew")
+        mixable_key_row.grid(row=7, column=0, sticky="ew")
         mixable_key_row.columnconfigure(0, weight=1)
         mixable_key_row.columnconfigure(1, weight=1)
         self.mixable_key_var = tk.StringVar(value=CHROMA_LABELS[0])
@@ -276,17 +265,25 @@ class YTDemucsApp:
             text="[sep]",
             variable=self.show_sep_var,
             command=self.refresh_saved_sessions_list,
-        ).grid(row=10, column=0, sticky="w", pady=(10, 0))
+        ).grid(row=8, column=0, sticky="w", pady=(10, 0))
         ttk.Checkbutton(
             controls_frame,
             text="[ns]",
             variable=self.show_ns_var,
             command=self.refresh_saved_sessions_list,
-        ).grid(row=11, column=0, sticky="w")
+        ).grid(row=9, column=0, sticky="w")
 
         ttk.Button(
             controls_frame, text="Clear", command=self.reset_session_filters
-        ).grid(row=12, column=0, sticky="ew", pady=(10, 0))
+        ).grid(row=10, column=0, sticky="ew", pady=(10, 0))
+
+        self.save_delete_button = ttk.Button(
+            controls_frame,
+            text="Save Session",
+            command=self.on_save_or_delete,
+            state="disabled",
+        )
+        self.save_delete_button.grid(row=12, column=0, sticky="ew", pady=(10, 0))
 
         self.player_frame = ttk.Frame(main_frame)
         self.player_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
