@@ -178,7 +178,10 @@ class YTDemucsApp:
         self.search_dropdown: tk.Toplevel | None = None
         self.search_result_frames: list[tk.Widget] = []
         self.search_result_images: list[ImageTk.PhotoImage] = []
+        self.search_row_actions: list[callable] = []
         self.search_results: list[SearchResult] = []
+        self.search_all_results: list[SearchResult] = []
+        self.search_page: int = 0
         self.highlight_index: int = -1
         self.search_loading: bool = False
         self.search_row_height_estimate: int = 64
@@ -342,8 +345,10 @@ class YTDemucsApp:
         self.search_debounce_id = None
         self.search_request_counter += 1
         request_id = self.search_request_counter
+        self.search_page = 0
         self.search_loading = True
         self.search_results = []
+        self.search_all_results = []
         self.show_search_dropdown(loading=True)
 
         def callback(future):
@@ -360,7 +365,7 @@ class YTDemucsApp:
         cmd = [
             "yt-dlp",
             "--dump-json",
-            f"ytsearch5:{query}",
+            f"ytsearch20:{query}",
         ]
         try:
             proc = subprocess.run(
@@ -400,9 +405,6 @@ class YTDemucsApp:
                         thumbnail_bytes=thumb_bytes,
                     )
                 )
-
-            if len(results) >= 5:
-                break
 
         return results
 
@@ -470,8 +472,27 @@ class YTDemucsApp:
             return
         if not results:
             results = [SearchResult("No results", "", "", "", None)]
-        self.search_results = results
+        self.search_all_results = results
+        self.search_page = 0
+        self.search_results = self.get_current_page_results()
         self.search_loading = False
+        self.show_search_dropdown()
+
+    def get_current_page_results(self) -> list[SearchResult]:
+        start = self.search_page * 5
+        end = start + 5
+        return self.search_all_results[start:end]
+
+    def change_search_page(self, delta: int):
+        if not self.search_all_results:
+            return
+        max_page = max(0, (len(self.search_all_results) - 1) // 5)
+        new_page = max(0, min(self.search_page + delta, max_page))
+        if new_page == self.search_page:
+            return
+        self.search_page = new_page
+        self.search_results = self.get_current_page_results()
+        self.highlight_index = -1
         self.show_search_dropdown()
 
     def show_search_dropdown(self, loading: bool = False):
@@ -501,6 +522,7 @@ class YTDemucsApp:
 
         self.search_result_frames.clear()
         self.search_result_images.clear()
+        self.search_row_actions.clear()
         self.highlight_index = -1
 
         if loading:
@@ -512,7 +534,8 @@ class YTDemucsApp:
             tk.Label(loading_row, text="Searching...", bg="#ffffff").pack(side="left", anchor="w")
             self.search_result_frames.append(loading_row)
 
-        for idx, result in enumerate(self.search_results):
+        page_results = self.search_results
+        for idx, result in enumerate(page_results):
             row = tk.Frame(list_frame, bg="#ffffff", bd=0, relief="flat", padx=4, pady=4)
             row.pack(fill="x", expand=True)
 
@@ -548,15 +571,54 @@ class YTDemucsApp:
             meta_label = tk.Label(text_frame, text=meta_text, fg="#666666", bg="#ffffff", anchor="w")
             meta_label.pack(anchor="w")
 
-            row.bind("<Enter>", lambda e, i=idx: self.set_highlight(i))
+            row.bind("<Enter>", lambda e, i=len(self.search_row_actions): self.set_highlight(i))
 
-            self.bind_search_row_click(row, idx)
-            self.bind_search_row_click(text_frame, idx)
-            self.bind_search_row_click(title_label, idx)
-            self.bind_search_row_click(meta_label, idx)
-            self.bind_search_row_click(thumb_label, idx)
+            action_index = len(self.search_row_actions)
+            self.search_row_actions.append(lambda r=result: self.apply_search_selection(r))
+
+            self.bind_search_row_click(row, action_index)
+            self.bind_search_row_click(text_frame, action_index)
+            self.bind_search_row_click(title_label, action_index)
+            self.bind_search_row_click(meta_label, action_index)
+            self.bind_search_row_click(thumb_label, action_index)
 
             self.search_result_frames.append(row)
+
+        if len(self.search_all_results) > (self.search_page + 1) * 5:
+            next_row = tk.Frame(list_frame, bg="#ffffff", bd=0, relief="flat", padx=4, pady=4)
+            next_row.pack(fill="x", expand=True)
+            next_label = tk.Label(
+                next_row,
+                text="Next 5 results",
+                fg="#0057d9",
+                bg="#ffffff",
+                anchor="w",
+            )
+            next_label.pack(fill="x", anchor="w")
+            action_index = len(self.search_row_actions)
+            self.search_row_actions.append(lambda: self.change_search_page(1))
+            next_row.bind("<Enter>", lambda e, i=action_index: self.set_highlight(i))
+            self.bind_search_row_click(next_row, action_index)
+            self.bind_search_row_click(next_label, action_index)
+            self.search_result_frames.append(next_row)
+
+        if self.search_page > 0:
+            prev_row = tk.Frame(list_frame, bg="#ffffff", bd=0, relief="flat", padx=4, pady=4)
+            prev_row.pack(fill="x", expand=True)
+            prev_label = tk.Label(
+                prev_row,
+                text="Previous 5 results",
+                fg="#0057d9",
+                bg="#ffffff",
+                anchor="w",
+            )
+            prev_label.pack(fill="x", anchor="w")
+            action_index = len(self.search_row_actions)
+            self.search_row_actions.append(lambda: self.change_search_page(-1))
+            prev_row.bind("<Enter>", lambda e, i=action_index: self.set_highlight(i))
+            self.bind_search_row_click(prev_row, action_index)
+            self.bind_search_row_click(prev_label, action_index)
+            self.search_result_frames.append(prev_row)
 
         self.search_dropdown.deiconify()
         self.search_dropdown.lift(self.root)
@@ -573,7 +635,7 @@ class YTDemucsApp:
     def bind_search_row_click(self, widget: tk.Widget, index: int):
         widget.bind(
             "<Button-1>",
-            lambda e, i=index: self.apply_search_selection(i),
+            lambda e, i=index: self.perform_search_row_action(i),
         )
 
     def set_highlight(self, index: int):
@@ -603,7 +665,7 @@ class YTDemucsApp:
             return True
         if keysym == "Return":
             if self.highlight_index >= 0:
-                self.apply_search_selection(self.highlight_index)
+                self.perform_search_row_action(self.highlight_index)
                 return True
             return False
         if keysym == "Escape":
@@ -611,11 +673,13 @@ class YTDemucsApp:
             return True
         return False
 
-    def apply_search_selection(self, index: int):
-        if not self.search_results:
+    def perform_search_row_action(self, index: int):
+        if index < 0 or index >= len(self.search_row_actions):
             return
-        index = max(0, min(index, len(self.search_results) - 1))
-        selection = self.search_results[index]
+        action = self.search_row_actions[index]
+        action()
+
+    def apply_search_selection(self, selection: SearchResult):
         if not selection.url:
             return
         self.url_var.set(selection.url)
@@ -626,9 +690,11 @@ class YTDemucsApp:
     def hide_search_dropdown(self):
         if self.search_dropdown and self.search_dropdown.winfo_exists():
             self.search_dropdown.withdraw()
+        self.search_all_results = []
         self.search_results = []
         self.search_result_frames.clear()
         self.search_result_images.clear()
+        self.search_row_actions.clear()
         self.highlight_index = -1
 
     # ---------- thumbnail ----------
