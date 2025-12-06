@@ -312,6 +312,17 @@ class AudioSession:
 
         def worker(generation: int):
             try:
+                def is_stale() -> bool:
+                    with self._pending_lock:
+                        return generation != self._pending_generation
+
+                def abort_if_stale() -> bool:
+                    if is_stale():
+                        if log_callback:
+                            log_callback("Tempo/pitch rebuild superseded; aborting current job.")
+                        return True
+                    return False
+
                 if log_callback:
                     log_callback(
                         f"Rebuilding audio for tempo={tempo_rate:.2f}x, "
@@ -327,6 +338,8 @@ class AudioSession:
 
                 new_stems: Dict[str, np.ndarray] = dict(base_stems)
                 for name in stems_to_build:
+                    if abort_if_stale():
+                        return
                     orig = self.original_stem_data.get(name)
                     if orig is None:
                         continue
@@ -345,6 +358,8 @@ class AudioSession:
 
                 new_mix = base_mix
                 if include_mix and self.original_mix is not None:
+                    if abort_if_stale():
+                        return
                     if progress_callback:
                         progress_callback(
                             completed / float(max(total_items, 1)),
@@ -357,6 +372,9 @@ class AudioSession:
                         sr=sr,
                     )
                     completed += 1
+
+                if abort_if_stale():
+                    return
 
                 new_total_samples = self._compute_total_samples(new_stems, new_mix)
                 new_missing = (
