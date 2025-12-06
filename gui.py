@@ -1155,7 +1155,7 @@ class YTDemucsApp:
 
     def load_saved_session(self, session: SavedSession):
         self.append_log(f"Loading saved session: {session.display_name}")
-        self.show_session_loading()
+        self.show_session_loading(f"Loading {session.title}...")
         self.clear_current_session()
         self.full_mix_path = session.audio_path
         self.current_title = session.title
