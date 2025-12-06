@@ -31,6 +31,7 @@ FLAT_TO_SHARP = {
 
 class YTDemucsApp:
     instances: list["YTDemucsApp"] = []
+    master_window: "MasterWindow | None" = None
 
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -285,6 +286,19 @@ class YTDemucsApp:
         self.url_entry.bind("<KeyRelease>", self.on_url_keypress)
         self.url_entry.bind("<FocusOut>", self.on_url_focus_out)
 
+    # ---------- session metadata ----------
+
+    def has_active_session(self) -> bool:
+        return self.full_mix_path is not None
+
+    def get_session_display_name(self) -> str:
+        window_title = self.root.wm_title()
+        if window_title:
+            return window_title
+        if self.current_title:
+            return self.current_title
+        return self.base_title
+
     # ---------- menu + window management ----------
 
     def setup_menubar(self):
@@ -305,15 +319,30 @@ class YTDemucsApp:
         file_menu.add_command(label="Exit", command=self.exit_application)
 
         menubar.add_cascade(label="File", menu=file_menu)
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(
+            label="Master",
+            accelerator="Ctrl+M",
+            command=self.open_master_window,
+        )
+        menubar.add_cascade(label="View", menu=view_menu)
         self.root.config(menu=menubar)
-        self.root.bind("<Control-n>", self.on_new_window_shortcut)
-        self.root.bind("<Control-w>", self.on_close_window_shortcut)
+        for sequence, handler in (
+            ("<Control-n>", self.on_new_window_shortcut),
+            ("<Control-w>", self.on_close_window_shortcut),
+            ("<Control-m>", self.on_master_shortcut),
+            ("<Control-M>", self.on_master_shortcut),
+        ):
+            self.root.bind(sequence, handler)
 
     def on_new_window_shortcut(self, event=None):
         self.create_new_window()
 
     def on_close_window_shortcut(self, event=None):
         self.close_window()
+
+    def on_master_shortcut(self, event=None):
+        self.toggle_master_window()
 
     def create_new_window(self):
         master = self.root if isinstance(self.root, tk.Tk) else (self.root.master or self.root)
@@ -343,16 +372,45 @@ class YTDemucsApp:
         if self in YTDemucsApp.instances:
             YTDemucsApp.instances.remove(self)
 
+        if not YTDemucsApp.instances:
+            YTDemucsApp.close_master_window()
+
         if self.root.winfo_exists():
             self.root.destroy()
 
     def exit_application(self):
+        YTDemucsApp.close_master_window()
         for instance in list(YTDemucsApp.instances):
             instance.destroy_window()
         try:
             self.root.quit()
         except Exception:
             pass
+
+    def open_master_window(self):
+        existing = YTDemucsApp.master_window
+        if existing and existing.window.winfo_exists():
+            existing.window.lift()
+            existing.window.focus_force()
+            return
+
+        YTDemucsApp.master_window = MasterWindow(self)
+
+    def toggle_master_window(self):
+        existing = YTDemucsApp.master_window
+        if existing and existing.window.winfo_exists():
+            YTDemucsApp.close_master_window()
+        else:
+            self.open_master_window()
+
+    @classmethod
+    def close_master_window(cls):
+        if cls.master_window and cls.master_window.window.winfo_exists():
+            try:
+                cls.master_window.window.destroy()
+            except Exception:
+                pass
+        cls.master_window = None
 
     # ---------- logging / status ----------
 
@@ -1185,24 +1243,46 @@ class YTDemucsApp:
             self.append_log("No audio loaded for playback.")
             return
 
-        if not self.player.is_playing:
-            self.player.play()
-            if self.play_pause_button is not None:
-                self.play_pause_button.config(text="Pause")
-        elif not self.player.is_paused:
-            self.player.pause()
-            if self.play_pause_button is not None:
-                self.play_pause_button.config(text="Resume")
+        if not self.player.is_playing or self.player.is_paused:
+            self.start_playback()
         else:
-            self.player.play()
-            if self.play_pause_button is not None:
-                self.play_pause_button.config(text="Pause")
+            self.pause_playback()
 
 
     def on_stop(self):
         self.player.stop()
-        if self.play_pause_button is not None:
+        self.update_play_pause_button()
+
+    def start_playback(self) -> bool:
+        if not self.player.audio_ok or self.full_mix_path is None:
+            return False
+        self.player.play()
+        self.update_play_pause_button()
+        return True
+
+    def pause_playback(self) -> bool:
+        if not self.player.audio_ok or self.full_mix_path is None:
+            return False
+        self.player.pause()
+        self.update_play_pause_button()
+        return True
+
+    def update_play_pause_button(self):
+        if self.play_pause_button is None:
+            return
+        if not self.player.is_playing:
             self.play_pause_button.config(text="Play")
+        elif self.player.is_paused:
+            self.play_pause_button.config(text="Resume")
+        else:
+            self.play_pause_button.config(text="Pause")
+
+    def get_playback_state(self) -> str:
+        if not self.player.is_playing:
+            return "stopped"
+        if self.player.is_paused:
+            return "paused"
+        return "playing"
 
     # ---------- RESET & CLEAR ----------
 
@@ -1472,6 +1552,17 @@ class YTDemucsApp:
             pct = int(v * 100)
             self.volume_label.config(text=f"{pct}%")
 
+    def get_master_volume(self) -> float:
+        try:
+            return float(self.volume_var.get()) if self.volume_var is not None else 0.0
+        except Exception:
+            return 0.0
+
+    def set_master_volume_from_master(self, volume: float):
+        if self.volume_var is not None:
+            self.volume_var.set(volume)
+        self.on_volume_change(str(volume))
+
 
     # ---------- render progress ----------
 
@@ -1660,4 +1751,281 @@ class YTDemucsApp:
         values = self.compute_key_table_values(semitones)
         for key, lbl in self.key_table_value_labels.items():
             lbl.config(text=values.get(key, "N/A"))
+
+
+class MasterWindow:
+    def __init__(self, owner: YTDemucsApp):
+        self.owner = owner
+        self.window = tk.Toplevel(owner.root)
+        self.window.title("Master")
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+
+        for seq in ("<Control-m>", "<Control-M>", "<Control-w>", "<Control-W>"):
+            self.window.bind(seq, self.on_shortcut)
+
+        self.table_frame = ttk.Frame(self.window, padding=10)
+        self.table_frame.grid(row=0, column=0, sticky="nsew")
+
+        controls = ttk.Frame(self.window, padding=(10, 0, 10, 10))
+        controls.grid(row=1, column=0, sticky="ew")
+        controls.columnconfigure(0, weight=1)
+
+        self.master_play_button = ttk.Button(
+            controls, text="Pause All", command=self.on_master_play_pause
+        )
+        self.master_play_button.grid(row=0, column=0, sticky="ew")
+
+        self.window.columnconfigure(0, weight=1)
+        self.window.rowconfigure(0, weight=1)
+
+        self.session_states: dict[YTDemucsApp, dict] = {}
+        self.last_paused_sessions: set[YTDemucsApp] = set()
+        self.solo_target: YTDemucsApp | None = None
+
+        self.refresh_sessions()
+        self.update_loop()
+
+    def on_shortcut(self, event=None):
+        if event and event.keysym.lower() == "w":
+            self.close()
+        else:
+            self.owner.toggle_master_window()
+        return "break"
+
+    def close(self):
+        try:
+            self.window.destroy()
+        finally:
+            if YTDemucsApp.master_window is self:
+                YTDemucsApp.master_window = None
+
+    # ---------- session table ----------
+
+    def refresh_sessions(self) -> list[YTDemucsApp]:
+        active_apps = [app for app in YTDemucsApp.instances if app.has_active_session()]
+
+        for app in list(self.session_states.keys()):
+            if app not in active_apps:
+                state = self.session_states.pop(app)
+                state["frame"].destroy()
+
+        for idx, app in enumerate(active_apps):
+            state = self.session_states.get(app)
+            if state is None:
+                state = self.build_session_column(app)
+                self.session_states[app] = state
+            state["frame"].grid(row=0, column=idx, padx=8, sticky="n")
+
+        return active_apps
+
+    def build_session_column(self, app: YTDemucsApp) -> dict:
+        frame = ttk.Frame(self.table_frame, padding=5)
+        name_label = ttk.Label(
+            frame, text=self.format_session_name(app.get_session_display_name())
+        )
+        name_label.grid(row=0, column=0, columnspan=2, pady=(0, 6))
+
+        meter = ttk.Progressbar(
+            frame, orient="vertical", mode="determinate", maximum=1.0, value=0.0, length=120
+        )
+        meter.grid(row=1, column=0, sticky="ns", padx=(0, 6))
+
+        volume_var = tk.DoubleVar(value=app.get_master_volume())
+        slider = ttk.Scale(
+            frame,
+            from_=1.0,
+            to=0.0,
+            orient="vertical",
+            variable=volume_var,
+            command=lambda v, target=app: self.on_volume_slider(target, v),
+            length=140,
+        )
+        slider.grid(row=1, column=1, sticky="ns")
+
+        mute_btn = ttk.Button(frame, text="Mute", command=lambda a=app: self.toggle_mute(a))
+        mute_btn.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+
+        solo_btn = ttk.Button(frame, text="Solo", command=lambda a=app: self.toggle_solo(a))
+        solo_btn.grid(row=3, column=0, columnspan=2, sticky="ew", pady=2)
+
+        play_btn = ttk.Button(frame, text="Play", command=lambda a=app: self.toggle_session_play(a))
+        play_btn.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+
+        frame.columnconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+
+        return {
+            "frame": frame,
+            "name_label": name_label,
+            "meter": meter,
+            "volume_var": volume_var,
+            "mute_btn": mute_btn,
+            "solo_btn": solo_btn,
+            "play_btn": play_btn,
+            "muted": False,
+            "saved_volume": None,
+            "solo_restore_volume": None,
+            "updating_volume": False,
+        }
+
+    # ---------- interactions ----------
+
+    def set_session_volume(self, app: YTDemucsApp, volume: float):
+        state = self.session_states.get(app)
+        if not state:
+            return
+        state["updating_volume"] = True
+        state["volume_var"].set(volume)
+        state["updating_volume"] = False
+        app.set_master_volume_from_master(volume)
+
+    def on_volume_slider(self, app: YTDemucsApp, value: str):
+        state = self.session_states.get(app)
+        if not state or state.get("updating_volume"):
+            return
+        try:
+            volume = float(value)
+        except ValueError:
+            volume = 0.0
+
+        if volume > 0.0 and state.get("muted"):
+            state["muted"] = False
+            state["mute_btn"].config(text="Mute")
+
+        if self.solo_target and app is not self.solo_target and volume > 0.0:
+            self.clear_solo()
+
+        self.set_session_volume(app, max(0.0, min(volume, 1.0)))
+
+    def toggle_mute(self, app: YTDemucsApp):
+        state = self.session_states.get(app)
+        if not state:
+            return
+
+        if state.get("muted"):
+            restore = state.get("saved_volume", app.get_master_volume() or 1.0)
+            state["muted"] = False
+            state["mute_btn"].config(text="Mute")
+            self.set_session_volume(app, restore)
+        else:
+            state["saved_volume"] = app.get_master_volume() or 1.0
+            state["muted"] = True
+            state["mute_btn"].config(text="Unmute")
+            self.set_session_volume(app, 0.0)
+
+        self.enforce_solo_rules()
+
+    def toggle_solo(self, app: YTDemucsApp):
+        if self.solo_target is app:
+            self.clear_solo()
+        else:
+            self.solo_target = app
+            self.enforce_solo_rules()
+
+    def clear_solo(self):
+        self.solo_target = None
+        self.enforce_solo_rules()
+
+    def enforce_solo_rules(self):
+        for app, state in self.session_states.items():
+            is_target = app is self.solo_target
+            state["solo_btn"].config(text="Unsolo" if is_target else "Solo")
+
+            if self.solo_target is None:
+                if not state.get("muted") and state.get("solo_restore_volume") is not None:
+                    self.set_session_volume(app, state["solo_restore_volume"])
+                state["solo_restore_volume"] = None
+                continue
+
+            if is_target:
+                state["solo_restore_volume"] = None
+                continue
+
+            if state.get("muted"):
+                continue
+
+            if state.get("solo_restore_volume") is None:
+                state["solo_restore_volume"] = app.get_master_volume() or 1.0
+            self.set_session_volume(app, 0.0)
+
+    def toggle_session_play(self, app: YTDemucsApp):
+        if not app.player.audio_ok or not app.has_active_session():
+            return
+
+        state = app.get_playback_state()
+        if state == "playing":
+            app.pause_playback()
+        else:
+            app.start_playback()
+
+    def on_master_play_pause(self):
+        active_apps = [app for app in YTDemucsApp.instances if app.has_active_session() and app.player.audio_ok]
+        currently_playing = [app for app in active_apps if app.get_playback_state() == "playing"]
+
+        if currently_playing:
+            self.last_paused_sessions = set(currently_playing)
+            for app in currently_playing:
+                app.pause_playback()
+        else:
+            targets = {
+                app for app in self.last_paused_sessions if app.has_active_session() and app.player.audio_ok
+            } or set(active_apps)
+            for app in targets:
+                app.start_playback()
+            self.last_paused_sessions = set()
+
+        self.update_master_play_button()
+
+    # ---------- updates ----------
+
+    def update_master_play_button(self):
+        any_playing = any(
+            app.has_active_session() and app.get_playback_state() == "playing"
+            for app in YTDemucsApp.instances
+        )
+        self.master_play_button.config(text="Pause All" if any_playing else "Play All")
+
+    def update_loop(self):
+        if not self.window.winfo_exists():
+            return
+
+        active_apps = self.refresh_sessions()
+        for app in active_apps:
+            state = self.session_states.get(app)
+            if not state:
+                continue
+
+            state["name_label"].config(
+                text=self.format_session_name(app.get_session_display_name())
+            )
+
+            try:
+                level = max(0.0, min(app.player.get_output_level(), 1.0))
+            except Exception:
+                level = 0.0
+            state["meter"].configure(value=level)
+
+            if not state.get("updating_volume"):
+                current_volume = app.get_master_volume()
+                state["updating_volume"] = True
+                state["volume_var"].set(current_volume)
+                state["updating_volume"] = False
+
+            playback_state = app.get_playback_state()
+            if playback_state == "playing":
+                state["play_btn"].config(text="Pause")
+            elif playback_state == "paused":
+                state["play_btn"].config(text="Resume")
+            else:
+                state["play_btn"].config(text="Play")
+
+        self.enforce_solo_rules()
+        self.update_master_play_button()
+        self.window.after(200, self.update_loop)
+
+    @staticmethod
+    def format_session_name(name: str, max_len: int = 12) -> str:
+        if len(name) <= max_len:
+            return name
+        return name[: max_len - 3] + "..."
 
