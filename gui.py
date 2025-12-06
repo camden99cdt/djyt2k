@@ -181,6 +181,7 @@ class YTDemucsApp:
         self.search_results: list[SearchResult] = []
         self.highlight_index: int = -1
         self.search_loading: bool = False
+        self.search_row_height_estimate: int = 64
 
         # audio engine
         self.player = StemAudioPlayer()
@@ -487,7 +488,8 @@ class YTDemucsApp:
         x = self.url_entry.winfo_rootx()
         y = self.url_entry.winfo_rooty() + self.url_entry.winfo_height()
         width = self.url_entry.winfo_width()
-        self.search_dropdown.geometry(f"{width}x200+{x}+{y}")
+        estimated_height = self.search_row_height_estimate * 5
+        self.search_dropdown.geometry(f"{width}x{estimated_height}+{x}+{y}")
 
         for child in self.search_dropdown.winfo_children():
             child.destroy()
@@ -560,10 +562,11 @@ class YTDemucsApp:
 
         row_heights = [frame.winfo_height() or frame.winfo_reqheight() for frame in self.search_result_frames]
         if row_heights:
-            average_height = sum(row_heights) // len(row_heights)
-            visible_rows = max(5, len(self.search_results) if not loading else len(self.search_results) + 1)
-            height = average_height * visible_rows
-            self.search_dropdown.geometry(f"{width}x{height}+{x}+{y}")
+            self.search_row_height_estimate = max(self.search_row_height_estimate, max(row_heights))
+        row_height = self.search_row_height_estimate
+        visible_rows = max(5, len(self.search_result_frames))
+        height = row_height * visible_rows
+        self.search_dropdown.geometry(f"{width}x{height}+{x}+{y}")
 
     def set_highlight(self, index: int):
         if not self.search_result_frames:
