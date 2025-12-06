@@ -291,7 +291,7 @@ class YTDemucsApp:
     def set_thumbnail_from_bytes(self, data: bytes):
         try:
             image = Image.open(BytesIO(data))
-            image.thumbnail((240, 240))
+            image.thumbnail((240, 135))
             photo = ImageTk.PhotoImage(image)
         except Exception as e:
             self.append_log(f"Could not process thumbnail: {e}")
