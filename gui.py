@@ -1551,6 +1551,15 @@ class YTDemucsApp:
 
         return f"{pitch_part} |  {current_key}"
 
+    @staticmethod
+    def normalize_mode(mode_raw: str) -> str:
+        mode_lower = mode_raw.lower()
+        if "min" in mode_lower:
+            return "minor"
+        if "maj" in mode_lower:
+            return "major"
+        return mode_raw
+
     def parse_key_text(self, key_text: str) -> tuple[int, str] | None:
         parts = key_text.split()
         if len(parts) < 2:
@@ -1565,7 +1574,7 @@ class YTDemucsApp:
         except ValueError:
             return None
 
-        return tonic_index, mode_raw
+        return tonic_index, self.normalize_mode(mode_raw)
 
     def get_current_key_text(self, semitones: float | None = None) -> str | None:
         base_key = self.song_key_text
@@ -1632,9 +1641,15 @@ class YTDemucsApp:
 
         values["plus_one"] = self.transpose_parsed_key(tonic_index, mode_raw, 7)
         values["minus_one"] = self.transpose_parsed_key(tonic_index, mode_raw, -7)
-        values["relative"] = self.compute_relative_key(tonic_index, mode_raw)
-        values["subdominant"] = self.transpose_parsed_key(tonic_index, mode_raw, 5)
-        values["dominant"] = self.transpose_parsed_key(tonic_index, mode_raw, 7)
+
+        relative_key_text = self.compute_relative_key(tonic_index, mode_raw)
+        values["relative"] = relative_key_text
+
+        rel_parsed = self.parse_key_text(relative_key_text)
+        if rel_parsed:
+            rel_tonic_index, rel_mode = rel_parsed
+            values["subdominant"] = self.transpose_parsed_key(rel_tonic_index, rel_mode, 5)
+            values["dominant"] = self.transpose_parsed_key(rel_tonic_index, rel_mode, 7)
 
         return values
 
