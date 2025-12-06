@@ -336,14 +336,23 @@ class SearchAutocomplete:
 
         self.set_selection(0)
         self.dropdown.update_idletasks()
-        measured_height = sum(f.winfo_height() for f in self.result_frames) + 4
-        requested_height = self.dropdown.winfo_reqheight()
+
+        frame_heights = []
+        for frame in self.result_frames:
+            # `winfo_height` can be 1 immediately after packing; fall back to
+            # requested size and a generous minimum per-row height to avoid a
+            # collapsed dropdown.
+            height_guess = max(frame.winfo_height(), frame.winfo_reqheight(), 90)
+            frame_heights.append(height_guess)
+
+        measured_height = sum(frame_heights) + 4
+        container_height = max(container.winfo_height(), container.winfo_reqheight())
         estimated_height = len(self.result_frames) * 92 + 12
 
-        # Use the largest value among the measured layout, Tk's requested size,
-        # and a generous estimate so the dropdown is tall enough even before
-        # geometry information stabilizes.
-        height = max(measured_height, requested_height, estimated_height)
+        # Use the largest value among the measured layout, container size, and
+        # a generous estimate so the dropdown is tall enough even before Tk
+        # reports final geometry.
+        height = max(measured_height, container_height, estimated_height)
         width = self.entry.winfo_width()
         x = self.entry.winfo_rootx()
         y = self.entry.winfo_rooty() + self.entry.winfo_height()
