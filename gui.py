@@ -116,21 +116,21 @@ class YTDemucsApp:
         meter_frame.columnconfigure(1, weight=1)
         meter_frame.columnconfigure(2, weight=1)
 
-        ttk.Label(meter_frame, text="Output Level").grid(row=0, column=0, sticky="w")
+        self.audio_meter_label = ttk.Label(meter_frame, text="-∞ dB", style="DisabledPlayback.TLabel")
+        self.audio_meter_label.grid(row=0, column=0, pady=(8, 0))
+
         self.audio_meter = ttk.Progressbar(
             meter_frame,
             mode="determinate",
             maximum=1.0,
             value=0.0,
-            length=220,
+            length=260,
         )
-        self.audio_meter.grid(row=0, column=1, sticky="ew", padx=(5, 0))
-        self.audio_meter_label = ttk.Label(meter_frame, text="-∞ dB", style="DisabledPlayback.TLabel")
-        self.audio_meter_label.grid(row=0, column=2, sticky="e", padx=(5, 0))
+        self.audio_meter.grid(row=0, column=1, sticky="ew", columnspan=2, pady=(8, 0))
 
         self.gain_var = tk.DoubleVar(value=0.0)
         self.gain_label = ttk.Label(meter_frame, text="+0.0 dB", style="DisabledPlayback.TLabel")
-        self.gain_label.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.gain_label.grid(row=1, column=0, pady=(8, 0))
         self.gain_slider = ttk.Scale(
             meter_frame,
             from_=-10.0,
@@ -140,14 +140,14 @@ class YTDemucsApp:
             command=self.on_gain_change,
             length=280,
         )
-        self.gain_slider.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        self.gain_slider.grid(row=1, column=1,  sticky="ew", columnspan=2, pady=(8, 0))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
 
         self.reverb_enabled_var = tk.BooleanVar(value=False)
         self.reverb_mix_var = tk.DoubleVar(value=0.45)
         self.reverb_checkbox = ttk.Checkbutton(
             meter_frame,
-            text="Enable Reverb",
+            text="Reverb",
             variable=self.reverb_enabled_var,
             command=self.on_reverb_toggle,
         )
@@ -1429,7 +1429,7 @@ class YTDemucsApp:
             command=self.on_volume_change,  # live update on drag
             length=500,                     # keep it wide
         )
-        vol_slider.grid(row=3, column=1, columnspan=4, sticky="ew", pady=(5, 0))
+        vol_slider.grid(row=3, column=1, columnspan=5, sticky="ew", pady=(5, 0))
 
 
         # playback speed (row 4) – snapping + wider slider
@@ -1446,7 +1446,7 @@ class YTDemucsApp:
             command=self.on_speed_drag,   # update label while dragging
             length=500,
         )
-        speed_slider.grid(row=4, column=1, columnspan=4, sticky="ew", pady=(5, 0))
+        speed_slider.grid(row=4, column=1, columnspan=5, sticky="ew", pady=(5, 0))
         speed_slider.bind("<ButtonRelease-1>", self.on_speed_release)
 
         # pitch (row 5) – semitones, -6..+6, 1.0 steps
@@ -1468,7 +1468,7 @@ class YTDemucsApp:
             command=self.on_pitch_drag,
             length=500,
         )
-        pitch_slider.grid(row=5, column=1, columnspan=4, sticky="ew", pady=(5, 0))
+        pitch_slider.grid(row=5, column=1, columnspan=5, sticky="ew", pady=(5, 0))
         pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
 
         self.update_key_table(self.pitch_var.get())
@@ -1485,7 +1485,7 @@ class YTDemucsApp:
         ttk.Separator(self.player_frame, orient="horizontal").grid(
             row=6,
             column=0,
-            columnspan=max(5, len(stem_names) + 1),
+            columnspan=max(6, len(stem_names) + 1),
             sticky="ew",
             pady=(10, 5),
         )
@@ -1500,7 +1500,7 @@ class YTDemucsApp:
         self.render_progress_bar.grid(
             row=7,
             column=0,
-            columnspan=4,
+            columnspan=7,
             sticky="ew",
             pady=(5, 0),
         )
@@ -1512,9 +1512,7 @@ class YTDemucsApp:
         )
         self.render_progress_label.grid(
             row=7,
-            column=4,
-            columnspan=max(1, len(stem_names) - 3),
-            sticky="w",
+            column=5,
             pady=(5, 0),
         )
 
@@ -1834,7 +1832,7 @@ class YTDemucsApp:
         if self.pitch_label is not None:
             self.pitch_label.config(text=self.format_pitch_label(0.0))
         if self.gain_label is not None:
-            self.gain_label.config(text="+0.0 dB")
+            self.gain_label.config(text="+0 dB")
         if self.reverb_mix_label is not None:
             self.reverb_mix_label.config(text="45% wet")
 
