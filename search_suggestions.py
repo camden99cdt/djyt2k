@@ -124,6 +124,7 @@ class SearchDropdownController:
     def fetch_search_results(self, query: str) -> list[SearchResult]:
         cmd = [
             "yt-dlp",
+            "--flat-playlist",
             "--dump-json",
             "ytsearch5:" + query,
         ]
@@ -147,6 +148,10 @@ class SearchDropdownController:
 
             title = data.get("title") or "(untitled)"
             url = data.get("original_url") or data.get("webpage_url") or ""
+            if not url:
+                video_id = data.get("url")
+                if video_id:
+                    url = f"https://www.youtube.com/watch?v={video_id}"
             duration = self.format_duration_from_seconds(data.get("duration"))
             published = self.format_time_ago(data)
             thumb_bytes = None
