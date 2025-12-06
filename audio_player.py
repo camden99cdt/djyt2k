@@ -7,6 +7,7 @@ import numpy as np
 import sounddevice as sd  # only to probe devices at init
 
 from audio_session import AudioSession
+from loop_controller import LoopController
 from playback_engine import PlaybackEngine
 
 
@@ -47,6 +48,8 @@ class StemAudioPlayer:
         self.play_index: int = 0
         self.is_playing: bool = False
         self.is_paused: bool = False
+
+        self.loop_controller = LoopController()
 
     # ---------- global master volume ----------
 
@@ -90,6 +93,8 @@ class StemAudioPlayer:
         self.play_index = 0
         self.is_playing = False
         self.is_paused = False
+        self.loop_controller.reset_bounds()
+        self.loop_controller.set_enabled(False)
 
     # ---------- envelopes / selection ----------
 
@@ -223,21 +228,35 @@ class StemAudioPlayer:
         if new_index is not None:
             self.play_index = new_index  # keep time continuous
 
-        # 2) Now pull from the *current* config
-        chunk = self.session.get_chunk(self.play_index, frames)
-        n = chunk.size
-        if n == 0:
-            self.is_playing = False
-            self.is_paused = False
-            self.play_index = 0
-            self.output_level = 0.0
-            return np.zeros(frames, dtype="float32")
+        loop_bounds = self.loop_controller.get_bounds_samples(self.session.total_samples)
+        loop_active = (
+            self.loop_controller.enabled
+            and loop_bounds is not None
+            and self.play_index <= loop_bounds[1]
+        )
 
-        self.play_index += n
-        if self.session.total_samples > 0 and self.play_index >= self.session.total_samples:
-            self.is_playing = False
-            self.is_paused = False
-            self.play_index = 0
+        # 2) Now pull from the *current* config
+        if loop_active and loop_bounds is not None:
+            chunk = self._get_looping_chunk(loop_bounds[0], loop_bounds[1], frames)
+            n = chunk.size
+        else:
+            chunk = self.session.get_chunk(self.play_index, frames)
+            n = chunk.size
+            if n == 0:
+                self.is_playing = False
+                self.is_paused = False
+                self.play_index = 0
+                self.output_level = 0.0
+                return np.zeros(frames, dtype="float32")
+
+            self.play_index += n
+            if (
+                self.session.total_samples > 0
+                and self.play_index >= self.session.total_samples
+            ):
+                self.is_playing = False
+                self.is_paused = False
+                self.play_index = 0
 
         # Apply master volume and clip
         gain = 10 ** (self.gain_db / 20.0)
@@ -254,6 +273,46 @@ class StemAudioPlayer:
             padded[:n] = chunk
             return padded
 
+        return chunk
+
+    def _get_looping_chunk(self, loop_start: int, loop_end: int, frames: int) -> np.ndarray:
+        """
+        Build a chunk that respects loop boundaries [loop_start, loop_end).
+        """
+        total_samples = self.session.total_samples
+        if total_samples <= 0 or loop_end <= loop_start:
+            return np.zeros(frames, dtype="float32")
+
+        chunk = np.zeros(frames, dtype="float32")
+        filled = 0
+        current_index = min(self.play_index, loop_end)
+
+        while filled < frames:
+            if current_index >= loop_end:
+                current_index = loop_start
+
+            remaining_loop = loop_end - current_index
+            if remaining_loop <= 0:
+                break
+
+            to_copy = min(frames - filled, remaining_loop)
+            segment = self.session.get_chunk(current_index, to_copy)
+            n = segment.size
+
+            if n == 0:
+                break
+
+            chunk[filled : filled + n] = segment
+            filled += n
+            current_index += n
+
+            if current_index >= total_samples:
+                current_index = loop_start
+
+        if current_index >= loop_end:
+            current_index = loop_start
+
+        self.play_index = current_index
         return chunk
 
     def stop_stream(self):
@@ -301,6 +360,26 @@ class StemAudioPlayer:
         self.is_playing = True
         self.is_paused = False
         self._ensure_engine()
+
+    # ---------- looping ----------
+
+    def set_loop_enabled(self, enabled: bool):
+        self.loop_controller.set_enabled(enabled)
+
+    def toggle_loop_enabled(self) -> bool:
+        return self.loop_controller.toggle()
+
+    def set_loop_start(self, position_seconds: float) -> bool:
+        return self.loop_controller.set_start(position_seconds, self.get_duration())
+
+    def set_loop_end(self, position_seconds: float) -> bool:
+        return self.loop_controller.set_end(position_seconds, self.get_duration())
+
+    def reset_loop_points(self):
+        self.loop_controller.reset_bounds()
+
+    def get_loop_bounds_seconds(self) -> tuple[float, float]:
+        return self.loop_controller.get_bounds_seconds(self.get_duration())
 
     # ---------- query ----------
 

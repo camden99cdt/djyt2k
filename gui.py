@@ -360,6 +360,7 @@ class YTDemucsApp:
         self.time_label: ttk.Label | None = None
         self.play_pause_button: ttk.Button | None = None
         self.stop_button: ttk.Button | None = None
+        self.loop_button: ttk.Button | None = None
         self.volume_label: ttk.Label | None = None
         self.volume_var: tk.DoubleVar | None = None
         self.speed_var: tk.DoubleVar | None = None
@@ -371,6 +372,8 @@ class YTDemucsApp:
         self.render_progress_label_var: tk.StringVar | None = None
         self.render_progress_bar: ttk.Progressbar | None = None
         self.render_progress_label: ttk.Label | None = None
+        self.loop_start_line_id: int | None = None
+        self.loop_end_line_id: int | None = None
         self.playback_control_widgets: list[tk.Widget] = [
             self.audio_meter,
             self.gain_slider,
@@ -1260,6 +1263,7 @@ class YTDemucsApp:
         self.time_label = None
         self.play_pause_button = None
         self.stop_button = None
+        self.loop_button = None
         self.volume_var = None
         self.volume_label = None
         self.speed_var = None
@@ -1287,6 +1291,8 @@ class YTDemucsApp:
         self.playback_label_widgets.extend(self.key_table_value_labels.values())
         self.waveform_points = []
         self.waveform_duration = 0.0
+        self.loop_start_line_id = None
+        self.loop_end_line_id = None
         self.stem_vars.clear()
 
         # load audio via player
@@ -1363,12 +1369,12 @@ class YTDemucsApp:
 
         # time label + controls
 
-        # Columns 1–4: buttons – equal size, minimum 160px each
+        # Columns 1–5: buttons – equal size, minimum 160px each
         # Column 0: time label — inflexible (no stretch)
         self.player_frame.columnconfigure(0, weight=0)
 
-        # Columns 1–4: buttons — flexible, equal width, with a min size
-        for col in range(1, 5):
+        # Columns 1–5: buttons — flexible, equal width, with a min size
+        for col in range(1, 6):
             self.player_frame.columnconfigure(
                 col,
                 weight=1,
@@ -1390,15 +1396,22 @@ class YTDemucsApp:
         )
         self.stop_button.grid(row=2, column=2, pady=(5, 0), sticky="nsew")
 
+        self.loop_button = ttk.Button(
+            self.player_frame, text="Loop", command=self.on_toggle_loop
+        )
+        self.loop_button.grid(row=2, column=3, pady=(5, 0), sticky="nsew")
+
         reset_button = ttk.Button(
             self.player_frame, text="Reset", command=self.on_reset_playback
         )
-        reset_button.grid(row=2, column=3, pady=(5, 0), sticky="nsew")
+        reset_button.grid(row=2, column=4, pady=(5, 0), sticky="nsew")
 
         clear_button = ttk.Button(
             self.player_frame, text="Clear", command=self.on_clear_app
         )
-        clear_button.grid(row=2, column=4, pady=(5, 0), sticky="nsew")
+        clear_button.grid(row=2, column=5, pady=(5, 0), sticky="nsew")
+
+        self.update_loop_button()
 
         # master volume (row 3) – wider slider via length
         self.volume_label = ttk.Label(self.player_frame, text="100%")
@@ -1540,6 +1553,7 @@ class YTDemucsApp:
             return
 
         self.wave_canvas.delete("wave")
+        self.wave_canvas.delete("loop_marker")
         w = self.wave_canvas.winfo_width()
         h = self.wave_canvas.winfo_height()
         if w <= 2 or h <= 2 or not self.waveform_points:
@@ -1562,7 +1576,41 @@ class YTDemucsApp:
                 tags="wave",
             )
 
+        self.draw_loop_markers()
         self.draw_cursor()
+
+    def draw_loop_markers(self):
+        if self.wave_canvas is None or self.waveform_duration <= 0:
+            return
+
+        w = self.wave_canvas.winfo_width()
+        h = self.wave_canvas.winfo_height()
+        if w <= 2 or h <= 2:
+            return
+
+        start_sec, end_sec = self.player.get_loop_bounds_seconds()
+        start_x = (start_sec / self.waveform_duration) * w
+        end_x = (end_sec / self.waveform_duration) * w
+
+        self.loop_start_line_id = self.wave_canvas.create_line(
+            start_x,
+            0,
+            start_x,
+            h,
+            fill="#00cc66",
+            width=2,
+            tags="loop_marker",
+        )
+
+        self.loop_end_line_id = self.wave_canvas.create_line(
+            end_x,
+            0,
+            end_x,
+            h,
+            fill="#cc0000",
+            width=2,
+            tags="loop_marker",
+        )
 
     def draw_cursor(self):
         if self.wave_canvas is None or self.waveform_duration <= 0:
@@ -1599,6 +1647,24 @@ class YTDemucsApp:
         frac = event.x / float(w)
         frac = max(0.0, min(frac, 1.0))
         new_pos = frac * self.waveform_duration
+        ctrl_pressed = bool(event.state & 0x0004)
+        alt_pressed = bool(event.state & 0x0008 or event.state & 0x20000)
+
+        if ctrl_pressed and alt_pressed:
+            self.player.reset_loop_points()
+            self.draw_waveform()
+            return
+
+        if ctrl_pressed:
+            if self.player.set_loop_start(new_pos):
+                self.draw_waveform()
+            return
+
+        if alt_pressed:
+            if self.player.set_loop_end(new_pos):
+                self.draw_waveform()
+            return
+
         self.append_log(f"Seeking to {new_pos:.2f} seconds")
         self.player.seek(new_pos)
         if self.play_pause_button is not None:
@@ -1655,12 +1721,29 @@ class YTDemucsApp:
         else:
             self.play_pause_button.config(text="Pause")
 
+    def update_loop_button(self):
+        if self.loop_button is None:
+            return
+        if self.player.loop_controller.enabled:
+            self.loop_button.config(text="Linear")
+        else:
+            self.loop_button.config(text="Loop")
+
     def get_playback_state(self) -> str:
         if not self.player.is_playing:
             return "stopped"
         if self.player.is_paused:
             return "paused"
         return "playing"
+
+    def on_toggle_loop(self):
+        if not self.player.audio_ok or self.waveform_duration <= 0:
+            return
+        enabled = self.player.toggle_loop_enabled()
+        self.update_loop_button()
+        status = "enabled" if enabled else "disabled"
+        self.append_log(f"Looping {status}.")
+        self.draw_waveform()
 
     # ---------- RESET & CLEAR ----------
 
@@ -1685,6 +1768,7 @@ class YTDemucsApp:
         self.time_label = None
         self.play_pause_button = None
         self.stop_button = None
+        self.loop_button = None
         self.volume_var = None
         self.volume_label = None
         self.speed_var = None
@@ -1697,6 +1781,8 @@ class YTDemucsApp:
         self.render_progress_bar = None
         self.render_progress_label = None
         self.waveform_points = []
+        self.loop_start_line_id = None
+        self.loop_end_line_id = None
         self.waveform_duration = 0.0
         self.stem_vars.clear()
         self.full_mix_path = None
@@ -1722,6 +1808,10 @@ class YTDemucsApp:
         Reset speed to 1x, pitch to +0.0 st, volume to 100%.
         Update both sliders/labels and underlying audio.
         """
+        self.player.set_loop_enabled(False)
+        self.player.reset_loop_points()
+        self.update_loop_button()
+
         # sliders
         if self.volume_var is not None:
             self.volume_var.set(1.0)
