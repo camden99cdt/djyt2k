@@ -180,6 +180,7 @@ class YTDemucsApp:
         self.search_result_images: list[ImageTk.PhotoImage] = []
         self.search_results: list[SearchResult] = []
         self.highlight_index: int = -1
+        self.search_loading: bool = False
 
         # audio engine
         self.player = StemAudioPlayer()
@@ -340,6 +341,9 @@ class YTDemucsApp:
         self.search_debounce_id = None
         self.search_request_counter += 1
         request_id = self.search_request_counter
+        self.search_loading = True
+        self.search_results = []
+        self.show_search_dropdown(loading=True)
 
         def callback(future):
             try:
@@ -466,10 +470,11 @@ class YTDemucsApp:
         if not results:
             results = [SearchResult("No results", "", "", "", None)]
         self.search_results = results
+        self.search_loading = False
         self.show_search_dropdown()
 
-    def show_search_dropdown(self):
-        if not self.search_results:
+    def show_search_dropdown(self, loading: bool = False):
+        if not self.search_results and not loading:
             self.hide_search_dropdown()
             return
 
@@ -489,19 +494,21 @@ class YTDemucsApp:
 
         container = ttk.Frame(self.search_dropdown, relief="solid", borderwidth=1)
         container.pack(fill="both", expand=True)
-
-        canvas = tk.Canvas(container, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        list_frame = ttk.Frame(canvas)
-        list_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=list_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        list_frame = ttk.Frame(container)
+        list_frame.pack(fill="both", expand=True)
 
         self.search_result_frames.clear()
         self.search_result_images.clear()
         self.highlight_index = -1
+
+        if loading:
+            loading_row = tk.Frame(list_frame, bg="#ffffff", padx=8, pady=8)
+            loading_row.pack(fill="x", expand=True)
+            spinner = ttk.Progressbar(loading_row, mode="indeterminate", length=80)
+            spinner.pack(side="left", padx=(0, 8))
+            spinner.start(10)
+            tk.Label(loading_row, text="Searching...", bg="#ffffff").pack(side="left", anchor="w")
+            self.search_result_frames.append(loading_row)
 
         for idx, result in enumerate(self.search_results):
             row = tk.Frame(list_frame, bg="#ffffff", bd=0, relief="flat", padx=4, pady=4)
@@ -550,6 +557,13 @@ class YTDemucsApp:
         self.search_dropdown.deiconify()
         self.search_dropdown.lift(self.root)
         self.search_dropdown.update_idletasks()
+
+        row_heights = [frame.winfo_height() or frame.winfo_reqheight() for frame in self.search_result_frames]
+        if row_heights:
+            average_height = sum(row_heights) // len(row_heights)
+            visible_rows = max(5, len(self.search_results) if not loading else len(self.search_results) + 1)
+            height = average_height * visible_rows
+            self.search_dropdown.geometry(f"{width}x{height}+{x}+{y}")
 
     def set_highlight(self, index: int):
         if not self.search_result_frames:
