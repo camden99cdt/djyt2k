@@ -3,6 +3,7 @@ import math
 import os
 import threading
 import urllib.request
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
@@ -164,7 +165,9 @@ class YTDemucsApp:
             lbl.grid(row=1, column=idx, sticky="ew", pady=(4, 0))
             self.key_table_value_labels[key] = lbl
 
-        ttk.Label(self.sessions_tab, text="Saved Sessions").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.sessions_tab, text="Saved Sessions").grid(
+            row=0, column=0, sticky="w"
+        )
         self.saved_sessions_listbox = tk.Listbox(
             self.sessions_tab,
             height=20,
@@ -177,13 +180,113 @@ class YTDemucsApp:
         self.saved_sessions_listbox.grid(row=1, column=0, sticky="nsew")
         saved_scrollbar.grid(row=1, column=1, sticky="ns")
 
+        controls_frame = ttk.Frame(self.sessions_tab, padding=(10, 0))
+        controls_frame.grid(row=1, column=2, sticky="nsw")
+        controls_frame.columnconfigure(0, weight=1)
+
         self.save_delete_button = ttk.Button(
-            self.sessions_tab,
+            controls_frame,
             text="Save Session",
             command=self.on_save_or_delete,
             state="disabled",
         )
-        self.save_delete_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.save_delete_button.grid(row=0, column=0, sticky="ew")
+
+        ttk.Separator(controls_frame, orient="horizontal").grid(
+            row=1, column=0, sticky="ew", pady=8
+        )
+
+        ttk.Label(controls_frame, text="Sort by").grid(row=2, column=0, sticky="w")
+        self.sessions_sort_var = tk.StringVar(value="Newest first")
+        sort_options = [
+            "Oldest first",
+            "Newest first",
+            "A -> Z",
+            "Z -> A",
+            "By key",
+        ]
+        self.sessions_sort_menu = ttk.Combobox(
+            controls_frame,
+            textvariable=self.sessions_sort_var,
+            values=sort_options,
+            state="readonly",
+        )
+        self.sessions_sort_menu.grid(row=3, column=0, sticky="ew", pady=(2, 0))
+        self.sessions_sort_menu.bind("<<ComboboxSelected>>", lambda *_: self.refresh_saved_sessions_list())
+
+        ttk.Separator(controls_frame, orient="horizontal").grid(
+            row=4, column=0, sticky="ew", pady=8
+        )
+
+        search_frame = ttk.Frame(controls_frame)
+        search_frame.grid(row=5, column=0, sticky="ew")
+        search_frame.columnconfigure(0, weight=1)
+        ttk.Label(search_frame, text="Search").grid(row=0, column=0, sticky="w")
+        self.session_search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=self.session_search_var)
+        search_entry.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        self.session_search_var.trace_add("write", lambda *_: self.refresh_saved_sessions_list())
+
+        self.mixable_var = tk.BooleanVar(value=False)
+        mixable_frame = ttk.Frame(controls_frame)
+        mixable_frame.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+        mixable_frame.columnconfigure(0, weight=1)
+        mixable_check = ttk.Checkbutton(
+            mixable_frame,
+            text="Mixable from...",
+            variable=self.mixable_var,
+            command=self.refresh_saved_sessions_list,
+        )
+        mixable_check.grid(row=0, column=0, sticky="w")
+
+        key_select_frame = ttk.Frame(mixable_frame)
+        key_select_frame.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        key_select_frame.columnconfigure(0, weight=1)
+        key_select_frame.columnconfigure(1, weight=1)
+        self.mixable_key_var = tk.StringVar(value=CHROMA_LABELS[0])
+        self.mixable_mode_var = tk.StringVar(value="Maj")
+        key_dropdown = ttk.Combobox(
+            key_select_frame,
+            textvariable=self.mixable_key_var,
+            values=CHROMA_LABELS,
+            state="readonly",
+        )
+        key_dropdown.grid(row=0, column=0, sticky="ew")
+        key_dropdown.bind("<<ComboboxSelected>>", lambda *_: self.refresh_saved_sessions_list())
+        mode_dropdown = ttk.Combobox(
+            key_select_frame,
+            textvariable=self.mixable_mode_var,
+            values=["Maj", "min"],
+            state="readonly",
+        )
+        mode_dropdown.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        mode_dropdown.bind("<<ComboboxSelected>>", lambda *_: self.refresh_saved_sessions_list())
+
+        checkbox_frame = ttk.Frame(controls_frame)
+        checkbox_frame.grid(row=7, column=0, sticky="w", pady=(8, 0))
+        self.show_sep_var = tk.BooleanVar(value=True)
+        self.show_unsep_var = tk.BooleanVar(value=True)
+        sep_cb = ttk.Checkbutton(
+            checkbox_frame,
+            text="[sep]",
+            variable=self.show_sep_var,
+            command=self.refresh_saved_sessions_list,
+        )
+        sep_cb.grid(row=0, column=0, sticky="w")
+        unsep_cb = ttk.Checkbutton(
+            checkbox_frame,
+            text="[ns]",
+            variable=self.show_unsep_var,
+            command=self.refresh_saved_sessions_list,
+        )
+        unsep_cb.grid(row=0, column=1, sticky="w", padx=(10, 0))
+
+        clear_button = ttk.Button(
+            controls_frame,
+            text="Clear",
+            command=self.reset_session_filters,
+        )
+        clear_button.grid(row=8, column=0, sticky="ew", pady=(10, 0))
 
         self.player_frame = ttk.Frame(main_frame)
         self.player_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
@@ -200,6 +303,7 @@ class YTDemucsApp:
         self.playback_tab.columnconfigure(0, weight=1)
         self.sessions_tab.rowconfigure(1, weight=1)
         self.sessions_tab.columnconfigure(0, weight=1)
+        self.sessions_tab.columnconfigure(2, weight=0)
 
         # ---------- GUI state ----------
         self.saved_session_store = SavedSessionStore()
@@ -789,16 +893,26 @@ class YTDemucsApp:
 
     def refresh_saved_sessions_list(self):
         self.saved_sessions_listbox.delete(0, tk.END)
-        self.displayed_sessions = self.saved_session_store.list_sessions()
+        all_sessions = self.saved_session_store.list_sessions()
+        filtered_sessions = self.filter_saved_sessions(all_sessions)
+        self.displayed_sessions = self.sort_saved_sessions(filtered_sessions)
         for session in self.displayed_sessions:
             self.saved_sessions_listbox.insert(tk.END, session.display_name)
 
+        found_selection = False
         if self.selected_saved_session_id:
             for idx, session in enumerate(self.displayed_sessions):
                 if session.session_id == self.selected_saved_session_id:
                     self.saved_sessions_listbox.selection_set(idx)
                     self.saved_sessions_listbox.see(idx)
+                    found_selection = True
                     break
+
+        if not found_selection:
+            self.selected_saved_session_id = None
+            self.saved_sessions_listbox.selection_clear(0, tk.END)
+
+        self.update_save_button_state()
 
     def update_save_button_state(self):
         if self.selected_saved_session_id:
@@ -807,6 +921,113 @@ class YTDemucsApp:
             self.save_delete_button.config(text="Save Session", state="normal")
         else:
             self.save_delete_button.config(text="Save Session", state="disabled")
+
+    def session_created_at(self, session: SavedSession) -> datetime:
+        try:
+            return datetime.fromisoformat(session.created_at)
+        except Exception:
+            return datetime.min
+
+    def normalize_session_key(self, key_text: str | None) -> str | None:
+        if not key_text:
+            return None
+
+        parsed = self.parse_key_text(key_text)
+        if not parsed:
+            return None
+
+        tonic_index, mode_raw = parsed
+        return f"{CHROMA_LABELS[tonic_index]} {self.normalize_mode(mode_raw)}"
+
+    def compute_mixable_keys(self, key_text: str) -> set[str]:
+        parsed = self.parse_key_text(key_text)
+        if not parsed:
+            return set()
+
+        tonic_index, mode_raw = parsed
+        base_mode = self.normalize_mode(mode_raw)
+        keys = set()
+
+        current = f"{CHROMA_LABELS[tonic_index]} {base_mode}"
+        keys.add(current)
+        keys.add(self.transpose_parsed_key(tonic_index, base_mode, 7))
+        keys.add(self.transpose_parsed_key(tonic_index, base_mode, -7))
+
+        relative_key = self.compute_relative_key(tonic_index, base_mode)
+        keys.add(relative_key)
+
+        rel_parsed = self.parse_key_text(relative_key)
+        if rel_parsed:
+            rel_tonic_index, rel_mode = rel_parsed
+            keys.add(self.transpose_parsed_key(rel_tonic_index, rel_mode, 5))
+            keys.add(self.transpose_parsed_key(rel_tonic_index, rel_mode, 7))
+
+        return keys
+
+    def filter_saved_sessions(self, sessions: list[SavedSession]) -> list[SavedSession]:
+        text = (self.session_search_var.get() or "").strip().lower()
+        show_sep = bool(self.show_sep_var.get())
+        show_unsep = bool(self.show_unsep_var.get())
+
+        mixable_keys: set[str] | None = None
+        if self.mixable_var.get():
+            base_mode = (
+                "major"
+                if self.mixable_mode_var.get().lower().startswith("maj")
+                else "minor"
+            )
+            base_key_text = f"{self.mixable_key_var.get()} {base_mode}"
+            mixable_keys = {k.lower() for k in self.compute_mixable_keys(base_key_text)}
+
+        filtered: list[SavedSession] = []
+        for session in sessions:
+            has_stems = bool(session.stems_rel_dir)
+            if has_stems and not show_sep:
+                continue
+            if not has_stems and not show_unsep:
+                continue
+
+            if text:
+                search_fields = [session.title, session.song_key_text or "", session.display_name]
+                if not any(text in field.lower() for field in search_fields):
+                    continue
+
+            if mixable_keys is not None:
+                normalized_key = self.normalize_session_key(session.song_key_text)
+                if not normalized_key or normalized_key.lower() not in mixable_keys:
+                    continue
+
+            filtered.append(session)
+
+        return filtered
+
+    def session_key_sort_value(self, session: SavedSession) -> tuple[float, str]:
+        normalized_key = self.normalize_session_key(session.song_key_text)
+        if not normalized_key:
+            return (float("inf"), session.title.lower())
+
+        parsed = self.parse_key_text(normalized_key)
+        if not parsed:
+            return (float("inf"), session.title.lower())
+
+        tonic_index, mode_raw = parsed
+        mode_rank = 0 if "major" in mode_raw else 1 if "minor" in mode_raw else 2
+        return (tonic_index * 3 + mode_rank, session.title.lower())
+
+    def sort_saved_sessions(self, sessions: list[SavedSession]) -> list[SavedSession]:
+        sort_choice = self.sessions_sort_var.get()
+        if sort_choice == "Oldest first":
+            return sorted(sessions, key=self.session_created_at)
+        if sort_choice == "Newest first":
+            return sorted(sessions, key=self.session_created_at, reverse=True)
+        if sort_choice == "A -> Z":
+            return sorted(sessions, key=lambda s: s.title.lower())
+        if sort_choice == "Z -> A":
+            return sorted(sessions, key=lambda s: s.title.lower(), reverse=True)
+        if sort_choice == "By key":
+            return sorted(sessions, key=self.session_key_sort_value)
+
+        return sessions
 
     def on_saved_session_select(self, event):
         selection = self.saved_sessions_listbox.curselection()
@@ -872,6 +1093,16 @@ class YTDemucsApp:
         self.selected_saved_session_id = None
         self.refresh_saved_sessions_list()
         self.update_save_button_state()
+
+    def reset_session_filters(self):
+        self.sessions_sort_var.set("Newest first")
+        self.session_search_var.set("")
+        self.mixable_var.set(False)
+        self.mixable_key_var.set(CHROMA_LABELS[0])
+        self.mixable_mode_var.set("Maj")
+        self.show_sep_var.set(True)
+        self.show_unsep_var.set(True)
+        self.refresh_saved_sessions_list()
 
     def load_saved_session(self, session: SavedSession):
         self.append_log(f"Loading saved session: {session.display_name}")
