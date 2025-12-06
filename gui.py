@@ -1521,6 +1521,13 @@ class YTDemucsApp:
                     db_text = f"{db:.1f} dB"
                 self.audio_meter_label.config(text=db_text)
 
+            if (
+                self.play_pause_button is not None
+                and not self.player.is_playing
+                and not self.player.is_paused
+            ):
+                self.play_pause_button.config(text="Play")
+
             self.draw_cursor()
         finally:
             self.root.after(100, self.update_playback_ui)

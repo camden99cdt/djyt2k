@@ -207,12 +207,16 @@ class StemAudioPlayer:
         n = chunk.size
         if n == 0:
             self.is_playing = False
+            self.is_paused = False
+            self.play_index = 0
             self.output_level = 0.0
             return np.zeros(frames, dtype="float32")
 
         self.play_index += n
         if self.session.total_samples > 0 and self.play_index >= self.session.total_samples:
             self.is_playing = False
+            self.is_paused = False
+            self.play_index = 0
 
         # Apply master volume and clip
         gain = 10 ** (self.gain_db / 20.0)
