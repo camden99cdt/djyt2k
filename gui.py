@@ -190,6 +190,22 @@ class YTDemucsApp:
         self.saved_sessions_listbox.grid(row=1, column=0, sticky="nsew")
         saved_scrollbar.grid(row=1, column=1, sticky="ns")
 
+        self.session_loading_var = tk.StringVar(value="")
+        self.session_loading_frame = ttk.Frame(sessions_list_frame)
+        self.session_loading_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.session_loading_frame.columnconfigure(1, weight=1)
+
+        self.session_loading_label = ttk.Label(
+            self.session_loading_frame,
+            textvariable=self.session_loading_var,
+            foreground="#555555",
+        )
+        self.session_loading_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.session_loading_bar = ttk.Progressbar(
+            self.session_loading_frame, mode="indeterminate", length=140
+        )
+        self.session_loading_bar.grid(row=0, column=1, sticky="ew")
+
         controls_frame = ttk.Frame(self.sessions_tab)
         controls_frame.grid(row=0, column=1, rowspan=3, sticky="nsew")
         controls_frame.columnconfigure(0, weight=1)
@@ -381,6 +397,7 @@ class YTDemucsApp:
         self.saved_sessions_listbox.bind("<Control-n>", self.on_saved_sessions_ctrl_n)
         self.refresh_saved_sessions_list()
         self.update_save_button_state()
+        self.hide_session_loading()
 
         # url entry bindings
         self.url_var.trace_add("write", self.on_url_text_change)
@@ -1053,6 +1070,20 @@ class YTDemucsApp:
         else:
             self.save_delete_button.config(text="Save Session", state="disabled")
 
+    def show_session_loading(self, message: str = "Loading session..."):
+        self.session_loading_var.set(message)
+        self.session_loading_frame.grid()
+        self.session_loading_bar.start(10)
+        self.saved_sessions_listbox.configure(state="disabled")
+        self.save_delete_button.configure(state="disabled")
+
+    def hide_session_loading(self):
+        self.session_loading_var.set("")
+        self.session_loading_bar.stop()
+        self.session_loading_frame.grid_remove()
+        self.saved_sessions_listbox.configure(state="normal")
+        self.update_save_button_state()
+
     def on_saved_session_select(self, event):
         selection = self.saved_sessions_listbox.curselection()
         if not selection:
@@ -1124,23 +1155,26 @@ class YTDemucsApp:
 
     def load_saved_session(self, session: SavedSession):
         self.append_log(f"Loading saved session: {session.display_name}")
-        self.clear_current_session()
-        self.full_mix_path = session.audio_path
-        self.current_title = session.title
-        self.song_key_text = session.song_key_text
-        self.current_pipeline_result = None
+        self.show_session_loading()
+        try:
+            self.clear_current_session()
+            self.full_mix_path = session.audio_path
+            self.current_title = session.title
+            self.song_key_text = session.song_key_text
+            self.current_pipeline_result = None
 
-        if session.thumbnail_path:
-            self.set_thumbnail_from_file(session.thumbnail_path)
-        else:
-            self.thumbnail_label.configure(image="", text="No\nthumbnail")
+            if session.thumbnail_path:
+                self.set_thumbnail_from_file(session.thumbnail_path)
+            else:
+                self.thumbnail_label.configure(image="", text="No\nthumbnail")
 
-        window_title = session.title
-        self.root.after(0, lambda t=window_title: self.root.title(t))
-        self.root.after(0, lambda: self.setup_player(session.stems_dir))
-        self.root.after(0, lambda: self.notebook.select(self.playback_tab))
-        self.update_key_table()
-        self.update_save_button_state()
+            window_title = session.title
+            self.root.after(0, lambda t=window_title: self.root.title(t))
+            self.root.after(0, lambda: self.setup_player(session.stems_dir))
+            self.root.after(0, lambda: self.notebook.select(self.playback_tab))
+            self.update_key_table()
+        finally:
+            self.hide_session_loading()
 
     # ---------- player UI ----------
 
