@@ -143,7 +143,7 @@ class YTDemucsApp:
         self.gain_slider.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
 
-        self.reverb_enabled_var = tk.BooleanVar(value=True)
+        self.reverb_enabled_var = tk.BooleanVar(value=False)
         self.reverb_mix_var = tk.DoubleVar(value=0.45)
         self.reverb_checkbox = ttk.Checkbutton(
             meter_frame,
@@ -1452,7 +1452,7 @@ class YTDemucsApp:
         self.update_key_table(self.pitch_var.get())
 
         if self.reverb_enabled_var is not None:
-            self.reverb_enabled_var.set(True)
+            self.reverb_enabled_var.set(False)
         if self.reverb_mix_var is not None:
             self.reverb_mix_var.set(0.45)
         self.player.set_reverb_enabled(bool(self.reverb_enabled_var.get()))
@@ -1720,7 +1720,7 @@ class YTDemucsApp:
         if self.gain_var is not None:
             self.gain_var.set(0.0)
         if self.reverb_enabled_var is not None:
-            self.reverb_enabled_var.set(True)
+            self.reverb_enabled_var.set(False)
         if self.reverb_mix_var is not None:
             self.reverb_mix_var.set(0.45)
 
@@ -1740,7 +1740,7 @@ class YTDemucsApp:
         self.player.set_master_volume(1.0)
         self.player.set_tempo_and_pitch(1.0, 0.0)
         self.player.set_gain_db(0.0)
-        self.player.set_reverb_enabled(True)
+        self.player.set_reverb_enabled(False)
         self.player.set_reverb_wet(0.45)
         self.update_reverb_controls_state()
 
