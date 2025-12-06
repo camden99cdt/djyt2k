@@ -515,7 +515,6 @@ class YTDemucsApp:
         for idx, result in enumerate(self.search_results):
             row = tk.Frame(list_frame, bg="#ffffff", bd=0, relief="flat", padx=4, pady=4)
             row.pack(fill="x", expand=True)
-            row.bind("<Button-1>", lambda e, i=idx: self.apply_search_selection(i))
 
             thumb_label = tk.Label(row, bg="#ffffff")
             thumb_label.pack(side="left", padx=(0, 6))
@@ -550,9 +549,12 @@ class YTDemucsApp:
             meta_label.pack(anchor="w")
 
             row.bind("<Enter>", lambda e, i=idx: self.set_highlight(i))
-            title_label.bind("<Button-1>", lambda e, i=idx: self.apply_search_selection(i))
-            meta_label.bind("<Button-1>", lambda e, i=idx: self.apply_search_selection(i))
-            thumb_label.bind("<Button-1>", lambda e, i=idx: self.apply_search_selection(i))
+
+            self.bind_search_row_click(row, idx)
+            self.bind_search_row_click(text_frame, idx)
+            self.bind_search_row_click(title_label, idx)
+            self.bind_search_row_click(meta_label, idx)
+            self.bind_search_row_click(thumb_label, idx)
 
             self.search_result_frames.append(row)
 
@@ -567,6 +569,12 @@ class YTDemucsApp:
         visible_rows = max(5, len(self.search_result_frames))
         height = row_height * visible_rows
         self.search_dropdown.geometry(f"{width}x{height}+{x}+{y}")
+
+    def bind_search_row_click(self, widget: tk.Widget, index: int):
+        widget.bind(
+            "<Button-1>",
+            lambda e, i=index: self.apply_search_selection(i),
+        )
 
     def set_highlight(self, index: int):
         if not self.search_result_frames:
