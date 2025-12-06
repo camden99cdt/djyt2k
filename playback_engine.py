@@ -11,11 +11,23 @@ class PlaybackEngine:
     """
     Thin wrapper around sounddevice.OutputStream.
     It pulls audio from a callback that returns a mono float32 numpy array.
+
+    Parameters
+    ----------
+    blocksize: Optional[int]
+        Frames per callback. Larger values lower CPU overhead but increase
+        latency; set to None to let sounddevice choose automatically.
     """
 
-    def __init__(self, sample_rate: int, pull_callback: Callable[[int], np.ndarray]):
+    def __init__(
+        self,
+        sample_rate: int,
+        pull_callback: Callable[[int], np.ndarray],
+        blocksize: Optional[int] = 1024,
+    ):
         self.sample_rate = sample_rate
         self.pull_callback = pull_callback
+        self.blocksize = blocksize
         self.stream: Optional[sd.OutputStream] = None
 
     def start(self):
@@ -26,7 +38,7 @@ class PlaybackEngine:
             samplerate=self.sample_rate,
             channels=1,
             callback=self._audio_callback,
-            blocksize=1024,
+            blocksize=self.blocksize,
         )
         self.stream.start()
 

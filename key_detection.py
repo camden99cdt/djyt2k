@@ -1,7 +1,10 @@
 # key_detection.py
-import numpy as np
 import librosa
+import numpy as np
 from librosa import util
+
+DEFAULT_TARGET_SR = 22050
+DEFAULT_ANALYSIS_SECONDS = 120.0
 
 # Key profiles for major and minor keys (Krumhansl-Schmuckler).
 major_profile = np.array([6.35, 2.23, 3.48, 2.33,
@@ -17,16 +20,31 @@ chroma_labels = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 
-def _detect_key_profiles(audio_path: str):
+def _detect_key_profiles(
+    audio_path: str,
+    target_sr: int = DEFAULT_TARGET_SR,
+    max_analysis_seconds: float = DEFAULT_ANALYSIS_SECONDS,
+    log_callback=None,
+):
     """
     Frame-wise chroma pipeline with tuning correction, smoothing, and
-    energy-based masking. Returns weighted correlations for major/minor
-    keys along with the best key estimate and confidence.
+    energy-based masking. Uses a downsampled, limited-duration slice of
+    audio to reduce CPU while keeping correlations stable. Returns weighted
+    correlations for major/minor keys along with the best key estimate and
+    confidence.
     """
 
-    # Load audio at native sample rate and trim silence
-    y, sr = librosa.load(audio_path, sr=None, mono=True)
+    # Load a representative slice at a downsampled rate to reduce CPU usage
+    y, sr = librosa.load(
+        audio_path, sr=target_sr, mono=True, duration=max_analysis_seconds
+    )
     yt, _ = librosa.effects.trim(y)
+
+    if log_callback and sr is not None:
+        analyzed_seconds = yt.size / float(sr)
+        log_callback(
+            f"Analyzing first {analyzed_seconds:.1f}s at {sr} Hz for key detection (CQT chroma)."
+        )
 
     if yt.size == 0:
         raise ValueError("Audio appears to be silent after trimming.")
@@ -142,7 +160,10 @@ def detect_key_string(audio_path: str, log_callback=None) -> str | None:
     """
     try:
         if log_callback:
-            log_callback("Analyzing song key (Krumhansl–Schmuckler)...")
+            log_callback(
+                "Analyzing song key (Krumhansl–Schmuckler) using up to "
+                f"{DEFAULT_ANALYSIS_SECONDS:.0f}s at {DEFAULT_TARGET_SR} Hz..."
+            )
 
         (
             major_corr,
@@ -151,7 +172,12 @@ def detect_key_string(audio_path: str, log_callback=None) -> str | None:
             key_mode,
             best_score,
             confidence,
-        ) = _detect_key_profiles(audio_path)
+        ) = _detect_key_profiles(
+            audio_path,
+            target_sr=DEFAULT_TARGET_SR,
+            max_analysis_seconds=DEFAULT_ANALYSIS_SECONDS,
+            log_callback=log_callback,
+        )
 
         # Check for relative major/minor ambiguity
         relative_index = (key_index + 9) % 12 if key_mode == "Maj" else (key_index + 3) % 12

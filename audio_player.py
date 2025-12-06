@@ -22,7 +22,7 @@ class StemAudioPlayer:
       - Expose envelopes & selection controls
     """
 
-    def __init__(self):
+    def __init__(self, blocksize: Optional[int] = 1024):
         self.audio_ok: bool = False
         self.error_message: Optional[str] = None
 
@@ -35,6 +35,8 @@ class StemAudioPlayer:
 
         self.session = AudioSession()
         self.engine: Optional[PlaybackEngine] = None
+        # Frames per callback; larger buffers reduce CPU load at the cost of latency
+        self.blocksize = blocksize
 
         self.render_progress_callback = None
 
@@ -196,6 +198,7 @@ class StemAudioPlayer:
             self.engine = PlaybackEngine(
                 sample_rate=self.session.sample_rate,
                 pull_callback=self._pull_audio,
+                blocksize=self.blocksize,
             )
             self.engine.start()
 
