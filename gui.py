@@ -137,6 +137,32 @@ class YTDemucsApp:
         self.gain_slider.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
 
+        self.key_table_headers: list[ttk.Label] = []
+        self.key_table_value_labels: dict[str, ttk.Label] = {}
+        self.key_table_frame = ttk.Frame(meter_frame)
+        self.key_table_frame.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        for col in range(6):
+            self.key_table_frame.columnconfigure(col, weight=1)
+
+        headers = ["Key", "+1", "-1", "Rel", "Sub", "Dom"]
+        value_keys = [
+            "current",
+            "plus_one",
+            "minus_one",
+            "relative",
+            "subdominant",
+            "dominant",
+        ]
+        for idx, text in enumerate(headers):
+            lbl = ttk.Label(self.key_table_frame, text=text, anchor="center", justify="center")
+            lbl.grid(row=0, column=idx, sticky="ew")
+            self.key_table_headers.append(lbl)
+
+        for idx, key in enumerate(value_keys):
+            lbl = ttk.Label(self.key_table_frame, text="N/A", anchor="center", justify="center")
+            lbl.grid(row=1, column=idx, sticky="ew", pady=(4, 0))
+            self.key_table_value_labels[key] = lbl
+
         ttk.Label(self.sessions_tab, text="Saved Sessions").grid(row=0, column=0, sticky="w")
         self.saved_sessions_listbox = tk.Listbox(
             self.sessions_tab,
@@ -204,6 +230,8 @@ class YTDemucsApp:
             self.gain_label,
             self.thumbnail_label,
         ]
+        self.playback_label_widgets.extend(self.key_table_headers)
+        self.playback_label_widgets.extend(self.key_table_value_labels.values())
         self.playback_enabled = False
 
         self.waveform_points: list[float] = []
@@ -244,6 +272,8 @@ class YTDemucsApp:
 
         self.set_playback_controls_state(False)
         YTDemucsApp.instances.append(self)
+
+        self.update_key_table()
 
         # saved sessions UI wiring
         self.saved_sessions_listbox.bind("<<ListboxSelect>>", self.on_saved_session_select)
@@ -694,6 +724,7 @@ class YTDemucsApp:
         self.root.after(0, lambda t=window_title: self.root.title(t))
         self.root.after(0, lambda: self.setup_player(result.stems_dir))
         self.root.after(0, lambda: self.notebook.select(self.playback_tab))
+        self.root.after(0, self.update_key_table)
         self.update_save_button_state()
 
     # ---------- saved sessions ----------
@@ -801,6 +832,7 @@ class YTDemucsApp:
         self.root.after(0, lambda t=window_title: self.root.title(t))
         self.root.after(0, lambda: self.setup_player(session.stems_dir))
         self.root.after(0, lambda: self.notebook.select(self.playback_tab))
+        self.update_key_table()
         self.update_save_button_state()
 
     # ---------- player UI ----------
@@ -999,6 +1031,8 @@ class YTDemucsApp:
         )
         pitch_slider.grid(row=5, column=1, columnspan=4, sticky="ew", pady=(5, 0))
         pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
+
+        self.update_key_table(self.pitch_var.get())
 
         # rendering progress (bottom of player area)
         ttk.Separator(self.player_frame, orient="horizontal").grid(
@@ -1221,6 +1255,7 @@ class YTDemucsApp:
         self.audio_meter_label.config(text="-∞ dB")
         self.player.set_gain_db(0.0)
         self.set_playback_controls_state(False)
+        self.update_key_table()
         self.update_save_button_state()
 
     def on_reset_playback(self):
@@ -1252,6 +1287,8 @@ class YTDemucsApp:
         self.player.set_master_volume(1.0)
         self.player.set_tempo_and_pitch(1.0, 0.0)
         self.player.set_gain_db(0.0)
+
+        self.update_key_table(0.0)
 
         # refresh duration & waveform
         self.waveform_duration = self.player.get_duration()
@@ -1350,6 +1387,7 @@ class YTDemucsApp:
         self.pitch_var.set(snapped)
         if self.pitch_label is not None:
             self.pitch_label.config(text=self.format_pitch_label(snapped))
+        self.update_key_table(snapped)
 
     def on_pitch_release(self, event):
         if self.pitch_var is None:
@@ -1360,6 +1398,8 @@ class YTDemucsApp:
 
         if self.pitch_label is not None:
             self.pitch_label.config(text=self.format_pitch_label(semitones))
+
+        self.update_key_table(semitones)
 
         self.waveform_duration = self.player.get_duration()
         self.update_waveform_from_selection()
@@ -1505,35 +1545,119 @@ class YTDemucsApp:
         sign = "+" if semitones >= 0 else ""
         pitch_part = f"{sign}{semitones:.1f} st"
 
-        base_key = self.song_key_text
-        if not base_key:
+        current_key = self.get_current_key_text(semitones)
+        if not current_key:
             return pitch_part
 
-        # Parse something like "F major" or "Bb minor"
-        parts = base_key.split()
+        return f"{pitch_part} |  {current_key}"
+
+    @staticmethod
+    def normalize_mode(mode_raw: str) -> str:
+        mode_lower = mode_raw.lower()
+        if "min" in mode_lower:
+            return "minor"
+        if "maj" in mode_lower:
+            return "major"
+        return mode_raw
+
+    def parse_key_text(self, key_text: str) -> tuple[int, str] | None:
+        parts = key_text.split()
         if len(parts) < 2:
-            return f"{pitch_part} |  {base_key}"
+            return None
 
-        tonic_raw = parts[0]              # e.g. "F", "Bb"
-        mode_raw = " ".join(parts[1:])    # e.g. "major", "minor"
-
-        # Normalize flats to sharps for indexing
+        tonic_raw = parts[0]
+        mode_raw = " ".join(parts[1:])
         tonic = FLAT_TO_SHARP.get(tonic_raw, tonic_raw)
 
-        # If tonic not recognized, fallback
         try:
-            base_index = CHROMA_LABELS.index(tonic)
+            tonic_index = CHROMA_LABELS.index(tonic)
         except ValueError:
-            return f"{pitch_part} |  {base_key}"
+            return None
 
-        # THE IMPORTANT FIX:
-        # semitones slider value *is* the number of semitone key steps.
-        key_steps = int(round(semitones))  # +1 st → +1 semitone
+        return tonic_index, self.normalize_mode(mode_raw)
 
-        new_index = (base_index + key_steps) % 12
+    def get_current_key_text(self, semitones: float | None = None) -> str | None:
+        base_key = self.song_key_text
+        if not base_key:
+            return None
+
+        parsed = self.parse_key_text(base_key)
+        if not parsed:
+            return base_key
+
+        tonic_index, mode_raw = parsed
+        key_steps = 0
+        if semitones is None:
+            if self.pitch_var is not None:
+                try:
+                    key_steps = int(round(float(self.pitch_var.get())))
+                except (TypeError, ValueError):
+                    key_steps = 0
+        else:
+            key_steps = int(round(semitones))
+
+        return self.transpose_parsed_key(tonic_index, mode_raw, key_steps)
+
+    @staticmethod
+    def transpose_parsed_key(tonic_index: int, mode_raw: str, semitone_steps: int) -> str:
+        new_index = (tonic_index + semitone_steps) % 12
         new_tonic = CHROMA_LABELS[new_index]
+        return f"{new_tonic} {mode_raw}"
 
-        new_key_text = f"{new_tonic} {mode_raw}"
+    def compute_relative_key(self, tonic_index: int, mode_raw: str) -> str:
+        mode_lower = mode_raw.lower()
+        if "minor" in mode_lower:
+            # Relative major is a minor third up
+            rel_index = (tonic_index + 3) % 12
+            rel_mode = "major"
+        else:
+            # Relative minor is a minor third down
+            rel_index = (tonic_index + 9) % 12
+            rel_mode = "minor"
+        return f"{CHROMA_LABELS[rel_index]} {rel_mode}"
 
-        return f"{pitch_part} |  {new_key_text}"
+    def compute_key_table_values(self, semitones: float | None = None) -> dict[str, str]:
+        default_text = "N/A"
+        values = {
+            "current": default_text,
+            "plus_one": default_text,
+            "minus_one": default_text,
+            "relative": default_text,
+            "subdominant": default_text,
+            "dominant": default_text,
+        }
+
+        current_key = self.get_current_key_text(semitones)
+        if not current_key:
+            return values
+
+        values["current"] = current_key
+
+        parsed = self.parse_key_text(current_key)
+        if not parsed:
+            return values
+
+        tonic_index, mode_raw = parsed
+
+        values["plus_one"] = self.transpose_parsed_key(tonic_index, mode_raw, 7)
+        values["minus_one"] = self.transpose_parsed_key(tonic_index, mode_raw, -7)
+
+        relative_key_text = self.compute_relative_key(tonic_index, mode_raw)
+        values["relative"] = relative_key_text
+
+        rel_parsed = self.parse_key_text(relative_key_text)
+        if rel_parsed:
+            rel_tonic_index, rel_mode = rel_parsed
+            values["subdominant"] = self.transpose_parsed_key(rel_tonic_index, rel_mode, 5)
+            values["dominant"] = self.transpose_parsed_key(rel_tonic_index, rel_mode, 7)
+
+        return values
+
+    def update_key_table(self, semitones: float | None = None):
+        if not self.key_table_value_labels:
+            return
+
+        values = self.compute_key_table_values(semitones)
+        for key, lbl in self.key_table_value_labels.items():
+            lbl.config(text=values.get(key, "N/A"))
 
