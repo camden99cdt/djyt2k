@@ -304,35 +304,38 @@ class AudioSession:
     @staticmethod
     def _apply_reverb(data: np.ndarray, sr: int) -> np.ndarray:
         """
-        Apply a lightweight Schroeder-style reverb using a handful of
-        feedforward comb taps. The output length matches the input, and the
-        effect is kept intentionally moderate to avoid coloring the mix too
-        heavily.
+        Apply a lightweight Schroeder-style reverb using several feedforward
+        taps plus a gentle feedback smear. The output length matches the input,
+        and the wet signal is normalized relative to the dry RMS so it remains
+        audible even at 100% wet.
         """
         if data.size == 0:
             return np.asarray(data, dtype="float32")
 
         wet = np.zeros_like(data, dtype="float32")
         delays = [
-            int(max(1, sr * 0.029)),
-            int(max(1, sr * 0.037)),
-            int(max(1, sr * 0.041)),
-            int(max(1, sr * 0.053)),
+            int(max(1, sr * 0.031)),
+            int(max(1, sr * 0.043)),
+            int(max(1, sr * 0.059)),
+            int(max(1, sr * 0.071)),
+            int(max(1, sr * 0.089)),
         ]
-        decays = [0.5, 0.42, 0.34, 0.28]
+        decays = [0.72, 0.63, 0.55, 0.47, 0.40]
 
         for delay, decay in zip(delays, decays):
             if delay >= data.size:
                 continue
             wet[delay:] += data[:-delay] * decay
 
-        # gentle lowpass to soften the tail
-        wet = 0.6 * wet + 0.4 * np.concatenate(([wet[0]], wet[:-1]))
+        # gentle lowpass and feedback smear to extend the tail
+        softened = 0.45 * wet + 0.55 * np.concatenate(([wet[0]], wet[:-1]))
+        wet = 0.8 * softened + 0.2 * np.concatenate(([softened[0]], softened[:-1]))
 
-        # Normalize relative to dry RMS to keep the effect subtle
+        # Normalize relative to dry RMS to keep the effect present
         dry_rms = float(np.sqrt(np.mean(np.square(data)))) or 1e-12
         wet_rms = float(np.sqrt(np.mean(np.square(wet)))) or 1e-12
-        wet *= min(1.5, dry_rms / wet_rms)
+        target_rms = dry_rms * 1.35
+        wet *= min(2.5, target_rms / wet_rms)
         np.clip(wet, -1.0, 1.0, out=wet)
         return wet.astype("float32")
 
