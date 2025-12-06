@@ -100,6 +100,9 @@ class YTDemucsApp:
         playback_top.grid(row=0, column=0, sticky="nsew")
         playback_top.columnconfigure(1, weight=1)
 
+        self.playback_controls_frame = ttk.Frame(self.playback_tab)
+        self.playback_controls_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+
         self.thumbnail_label = ttk.Label(
             playback_top,
             text="No\nthumbnail",
@@ -1137,6 +1140,8 @@ class YTDemucsApp:
         # clear UI
         for w in self.player_frame.winfo_children():
             w.destroy()
+        for w in self.playback_controls_frame.winfo_children():
+            w.destroy()
 
         self.wave_canvas = None
         self.wave_cursor_id = None
@@ -1184,7 +1189,7 @@ class YTDemucsApp:
         self.wave_canvas.grid(
             row=0,
             column=0,
-            columnspan=max(6, len(stem_names) + 2),
+            columnspan=5,
             sticky="ew",
             pady=(0, 5),
         )
@@ -1192,13 +1197,13 @@ class YTDemucsApp:
         self.wave_canvas.bind("<Configure>", self.on_waveform_configure)
         self.wave_canvas.bind("<Button-1>", self.on_waveform_click)
 
+        controls_frame = ttk.Frame(self.playback_controls_frame)
+        controls_frame.grid(row=0, column=0, sticky="ew")
+        controls_frame.columnconfigure(1, weight=1)
+
         # stem checkboxes (only if we actually have stems)
-        stems_frame = ttk.Frame(self.player_frame)
-        stems_frame.grid(
-            row=1,
-            column=0,
-            columnspan=max(6, len(stem_names) + 2),
-        )
+        stems_frame = ttk.Frame(controls_frame)
+        stems_frame.grid(row=0, column=0, columnspan=2, sticky="w")
 
         for idx, stem_name in enumerate(stem_names):
             var = tk.BooleanVar(value=True)
@@ -1221,6 +1226,77 @@ class YTDemucsApp:
         )
         cb_all.grid(row=0, column=0, padx=(0, 10))
 
+        # playback speed – snapping + wider slider
+        self.speed_var = tk.DoubleVar(value=1.0)
+        self.speed_label = ttk.Label(controls_frame, text="1.00x")
+        self.speed_label.grid(row=1, column=0, pady=(8, 0), sticky="w")
+
+        speed_slider = ttk.Scale(
+            controls_frame,
+            from_=0.25,
+            to=2.0,
+            orient="horizontal",
+            variable=self.speed_var,
+            command=self.on_speed_drag,   # update label while dragging
+            length=400,
+        )
+        speed_slider.grid(row=1, column=1, sticky="ew", pady=(8, 0))
+        speed_slider.bind("<ButtonRelease-1>", self.on_speed_release)
+
+        # pitch – semitones, -3..+3, 0.5 steps
+        self.pitch_var = tk.DoubleVar(value=0.0)
+        initial_pitch = 0.0
+        self.pitch_label = ttk.Label(
+            controls_frame,
+            text=self.format_pitch_label(initial_pitch)
+        )
+        self.pitch_label.grid(row=2, column=0, pady=(5, 0), sticky="w")
+
+        pitch_slider = ttk.Scale(
+            controls_frame,
+            from_=-3.0,
+            to=3.0,
+            orient="horizontal",
+            variable=self.pitch_var,
+            command=self.on_pitch_drag,
+            length=400,
+        )
+        pitch_slider.grid(row=2, column=1, sticky="ew", pady=(5, 0))
+        pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
+
+        self.update_key_table(self.pitch_var.get())
+
+        ttk.Separator(controls_frame, orient="horizontal").grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(10, 5)
+        )
+        self.render_progress_var = tk.DoubleVar(value=0.0)
+        self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
+        self.render_progress_bar = ttk.Progressbar(
+            controls_frame,
+            variable=self.render_progress_var,
+            maximum=100,
+            mode="determinate",
+        )
+        self.render_progress_bar.grid(
+            row=4,
+            column=0,
+            sticky="ew",
+            pady=(5, 0),
+        )
+        controls_frame.columnconfigure(0, weight=1)
+        self.render_progress_label = ttk.Label(
+            controls_frame,
+            textvariable=self.render_progress_label_var,
+            # Fixed width prevents layout shifts when the status text changes.
+            width=28,
+        )
+        self.render_progress_label.grid(
+            row=4,
+            column=1,
+            sticky="w",
+            pady=(5, 0),
+        )
+
         # If no stems at all (skip separation), force All mode in player
         if not stem_names:
             self.player.set_play_all(True)
@@ -1242,32 +1318,32 @@ class YTDemucsApp:
 
         self.time_label = ttk.Label(self.player_frame, text="00:00 / 00:00")
         # No sticky -> it keeps its natural (requested) size
-        self.time_label.grid(row=2, column=0, pady=(5, 0))
+        self.time_label.grid(row=1, column=0, pady=(5, 0))
 
         self.play_pause_button = ttk.Button(
             self.player_frame, text="Play", command=self.on_play_pause
         )
-        self.play_pause_button.grid(row=2, column=1, pady=(5, 0), sticky="nsew")
+        self.play_pause_button.grid(row=1, column=1, pady=(5, 0), sticky="nsew")
 
         self.stop_button = ttk.Button(
             self.player_frame, text="Stop", command=self.on_stop
         )
-        self.stop_button.grid(row=2, column=2, pady=(5, 0), sticky="nsew")
+        self.stop_button.grid(row=1, column=2, pady=(5, 0), sticky="nsew")
 
         reset_button = ttk.Button(
             self.player_frame, text="Reset", command=self.on_reset_playback
         )
-        reset_button.grid(row=2, column=3, pady=(5, 0), sticky="nsew")
+        reset_button.grid(row=1, column=3, pady=(5, 0), sticky="nsew")
 
         clear_button = ttk.Button(
             self.player_frame, text="Clear", command=self.on_clear_app
         )
-        clear_button.grid(row=2, column=4, pady=(5, 0), sticky="nsew")
+        clear_button.grid(row=1, column=4, pady=(5, 0), sticky="nsew")
 
-        # master volume (row 3) – wider slider via length
+        # master volume (row 2) – wider slider via length
         self.volume_label = ttk.Label(self.player_frame, text="100%")
         self.volume_label.grid(
-            row=3, column=0, pady=(5, 0)
+            row=2, column=0, pady=(5, 0)
         )
 
         self.volume_var = tk.DoubleVar(value=1.0)
@@ -1280,85 +1356,8 @@ class YTDemucsApp:
             command=self.on_volume_change,  # live update on drag
             length=500,                     # keep it wide
         )
-        vol_slider.grid(row=3, column=1, columnspan=4, sticky="ew", pady=(5, 0))
+        vol_slider.grid(row=2, column=1, columnspan=4, sticky="ew", pady=(5, 0))
 
-
-        # playback speed (row 4) – snapping + wider slider
-        self.speed_var = tk.DoubleVar(value=1.0)
-        self.speed_label = ttk.Label(self.player_frame, text="1.00x")
-        self.speed_label.grid(row=4, column=0, pady=(5, 0))
-
-        speed_slider = ttk.Scale(
-            self.player_frame,
-            from_=0.25,
-            to=2.0,
-            orient="horizontal",
-            variable=self.speed_var,
-            command=self.on_speed_drag,   # update label while dragging
-            length=500,
-        )
-        speed_slider.grid(row=4, column=1, columnspan=4, sticky="ew", pady=(5, 0))
-        speed_slider.bind("<ButtonRelease-1>", self.on_speed_release)
-
-        # pitch (row 5) – semitones, -3..+3, 0.5 steps
-        self.pitch_var = tk.DoubleVar(value=0.0)
-        initial_pitch = 0.0
-        self.pitch_label = ttk.Label(
-            self.player_frame,
-            text=self.format_pitch_label(initial_pitch)
-        )
-        self.pitch_label.grid(row=5, column=0, pady=(5, 0))
-
-        pitch_slider = ttk.Scale(
-            self.player_frame,
-            from_=-3.0,
-            to=3.0,
-            orient="horizontal",
-            variable=self.pitch_var,
-            command=self.on_pitch_drag,
-            length=500,
-        )
-        pitch_slider.grid(row=5, column=1, columnspan=4, sticky="ew", pady=(5, 0))
-        pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
-
-        self.update_key_table(self.pitch_var.get())
-
-        # rendering progress (bottom of player area)
-        ttk.Separator(self.player_frame, orient="horizontal").grid(
-            row=6,
-            column=0,
-            columnspan=max(5, len(stem_names) + 1),
-            sticky="ew",
-            pady=(10, 5),
-        )
-        self.render_progress_var = tk.DoubleVar(value=0.0)
-        self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
-        self.render_progress_bar = ttk.Progressbar(
-            self.player_frame,
-            variable=self.render_progress_var,
-            maximum=100,
-            mode="determinate",
-        )
-        self.render_progress_bar.grid(
-            row=7,
-            column=0,
-            columnspan=4,
-            sticky="ew",
-            pady=(5, 0),
-        )
-        self.render_progress_label = ttk.Label(
-            self.player_frame,
-            textvariable=self.render_progress_label_var,
-            # Fixed width prevents layout shifts when the status text changes.
-            width=28,
-        )
-        self.render_progress_label.grid(
-            row=7,
-            column=4,
-            columnspan=max(1, len(stem_names) - 3),
-            sticky="w",
-            pady=(5, 0),
-        )
 
         # initial waveform
         self.update_waveform_from_selection()
