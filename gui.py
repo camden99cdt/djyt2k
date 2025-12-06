@@ -1,6 +1,7 @@
 # gui.py
 import os
 import threading
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
