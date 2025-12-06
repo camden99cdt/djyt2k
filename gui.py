@@ -463,7 +463,6 @@ class YTDemucsApp:
             row=1,
             column=0,
             columnspan=max(6, len(stem_names) + 2),
-            sticky="w",
         )
 
         for idx, stem_name in enumerate(stem_names):
@@ -474,7 +473,7 @@ class YTDemucsApp:
                 variable=var,
                 command=self.on_stem_toggle,
             )
-            cb.grid(row=0, column=idx + 1, sticky="w", padx=(0, 5))
+            cb.grid(row=0, column=idx + 1, padx=(0, 5))
             self.stem_vars[stem_name] = var
 
         # "All" checkbox (full mix)
@@ -485,41 +484,55 @@ class YTDemucsApp:
             variable=self.all_var,
             command=self.on_all_toggle,
         )
-        cb_all.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        cb_all.grid(row=0, column=0, padx=(0, 10))
 
         # If no stems at all (skip separation), force All mode in player
         if not stem_names:
             self.player.set_play_all(True)
 
         # time label + controls
+
+        # Columns 1–4: buttons – equal size, minimum 160px each
+        # Column 0: time label — inflexible (no stretch)
+        self.player_frame.columnconfigure(0, weight=0)
+
+        # Columns 1–4: buttons — flexible, equal width, with a min size
+        for col in range(1, 5):
+            self.player_frame.columnconfigure(
+                col,
+                weight=1,
+                minsize=40,
+                uniform="buttons",
+            )
+
         self.time_label = ttk.Label(self.player_frame, text="00:00 / 00:00")
-        self.time_label.grid(row=2, column=0, sticky="w", pady=(5, 0))
+        # No sticky -> it keeps its natural (requested) size
+        self.time_label.grid(row=2, column=0, pady=(5, 0))
 
         self.play_pause_button = ttk.Button(
             self.player_frame, text="Play", command=self.on_play_pause
         )
-        self.play_pause_button.grid(row=2, column=1, pady=(5, 0), sticky="w")
+        self.play_pause_button.grid(row=2, column=1, pady=(5, 0), sticky="nsew")
 
         self.stop_button = ttk.Button(
             self.player_frame, text="Stop", command=self.on_stop
         )
-        self.stop_button.grid(row=2, column=2, pady=(5, 0), sticky="w")
+        self.stop_button.grid(row=2, column=2, pady=(5, 0), sticky="nsew")
 
-        # NEW: Reset & Clear buttons
         reset_button = ttk.Button(
             self.player_frame, text="Reset", command=self.on_reset_playback
         )
-        reset_button.grid(row=2, column=3, pady=(5, 0), sticky="w")
+        reset_button.grid(row=2, column=3, pady=(5, 0), sticky="nsew")
 
         clear_button = ttk.Button(
             self.player_frame, text="Clear", command=self.on_clear_app
         )
-        clear_button.grid(row=2, column=4, pady=(5, 0), sticky="w")
+        clear_button.grid(row=2, column=4, pady=(5, 0), sticky="nsew")
 
         # master volume (row 3) – wider slider via length
         self.volume_label = ttk.Label(self.player_frame, text="100%")
         self.volume_label.grid(
-            row=3, column=0, sticky="w", pady=(5, 0)
+            row=3, column=0, pady=(5, 0)
         )
 
         self.volume_var = tk.DoubleVar(value=1.0)
@@ -538,7 +551,7 @@ class YTDemucsApp:
         # playback speed (row 4) – snapping + wider slider
         self.speed_var = tk.DoubleVar(value=1.0)
         self.speed_label = ttk.Label(self.player_frame, text="1.00x")
-        self.speed_label.grid(row=4, column=0, sticky="w", pady=(5, 0))
+        self.speed_label.grid(row=4, column=0, pady=(5, 0))
 
         speed_slider = ttk.Scale(
             self.player_frame,
@@ -559,7 +572,7 @@ class YTDemucsApp:
             self.player_frame,
             text=self.format_pitch_label(initial_pitch)
         )
-        self.pitch_label.grid(row=5, column=0, sticky="w", pady=(5, 0))
+        self.pitch_label.grid(row=5, column=0, pady=(5, 0))
 
         pitch_slider = ttk.Scale(
             self.player_frame,
