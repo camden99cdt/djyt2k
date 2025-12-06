@@ -40,6 +40,8 @@ class StemAudioPlayer:
         self.master_volume: float = 1.0
         self.gain_db: float = 0.0
         self.output_level: float = 0.0
+        self.reverb_enabled: bool = False
+        self.reverb_balance: float = 0.0
 
         self.play_index: int = 0
         self.is_playing: bool = False
@@ -173,8 +175,31 @@ class StemAudioPlayer:
     def set_gain_db(self, gain_db: float):
         self.gain_db = max(-10.0, min(float(gain_db), 10.0))
 
+    def set_reverb_enabled(self, enabled: bool):
+        self.reverb_enabled = bool(enabled)
+        self.session.set_reverb_enabled(
+            self.reverb_enabled,
+            log_callback=getattr(self, "log_callback", None),
+            progress_callback=self.render_progress_callback,
+        )
+
+    def set_reverb_balance(self, balance: float):
+        self.reverb_balance = max(-1.0, min(1.0, float(balance)))
+        self.session.set_reverb_balance(self.reverb_balance)
+        if self.reverb_enabled:
+            self.session.ensure_reverb_ready(
+                log_callback=getattr(self, "log_callback", None),
+                progress_callback=self.render_progress_callback,
+            )
+
     def get_output_level(self) -> float:
         return self.output_level
+
+    def get_reverb_enabled(self) -> bool:
+        return bool(self.session.reverb_enabled)
+
+    def get_reverb_balance(self) -> float:
+        return float(self.session.reverb_balance)
 
     # ---------- playback engine ----------
 

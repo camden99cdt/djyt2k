@@ -47,6 +47,7 @@ class AudioSession:
         self.pending_pitch_semitones: float = 0.0
         self.pending_missing_stems: Set[str] = set()
         self.pending_total_samples: int = 0
+        self.pending_reverb_mix_data: Optional[np.ndarray] = None
         self.pending_ready: bool = False
         self._pending_generation: int = 0  # to discard stale builds
         self._pending_lock = threading.Lock()
@@ -58,6 +59,9 @@ class AudioSession:
         # Playback configuration
         self.active_stems: Set[str] = set()
         self.play_all: bool = False  # True -> play full mix only
+        self.reverb_enabled: bool = False
+        self.reverb_balance: float = 0.0  # -1.0 (dry) to +1.0 (wet)
+        self.current_reverb_mix_data: Optional[np.ndarray] = None
 
     # -------------------------------------------------------------------------
     # LOADING
@@ -178,6 +182,7 @@ class AudioSession:
 
         self.current_stem_data.clear()
         self.current_mix_data = None
+        self.current_reverb_mix_data = None
         self.tempo_rate = 1.0
         self.pitch_semitones = 0.0
         self.current_missing_stems = set()
@@ -188,10 +193,13 @@ class AudioSession:
 
         self.active_stems.clear()
         self.play_all = False
+        self.reverb_enabled = False
+        self.reverb_balance = 0.0
 
         with self._pending_lock:
             self.pending_stem_data = {}
             self.pending_mix_data = None
+            self.pending_reverb_mix_data = None
             self.pending_missing_stems = set()
             self.pending_total_samples = 0
             self.pending_ready = False
@@ -289,6 +297,41 @@ class AudioSession:
         np.clip(y, -1.0, 1.0, out=y)
         return np.asarray(y, dtype="float32")
 
+    @staticmethod
+    def _apply_reverb(data: np.ndarray, sr: int) -> np.ndarray:
+        """
+        Apply a lightweight Schroeder-style reverb using a handful of
+        feedforward comb taps. The output length matches the input, and the
+        effect is kept intentionally moderate to avoid coloring the mix too
+        heavily.
+        """
+        if data.size == 0:
+            return np.asarray(data, dtype="float32")
+
+        wet = np.zeros_like(data, dtype="float32")
+        delays = [
+            int(max(1, sr * 0.029)),
+            int(max(1, sr * 0.037)),
+            int(max(1, sr * 0.041)),
+            int(max(1, sr * 0.053)),
+        ]
+        decays = [0.5, 0.42, 0.34, 0.28]
+
+        for delay, decay in zip(delays, decays):
+            if delay >= data.size:
+                continue
+            wet[delay:] += data[:-delay] * decay
+
+        # gentle lowpass to soften the tail
+        wet = 0.6 * wet + 0.4 * np.concatenate(([wet[0]], wet[:-1]))
+
+        # Normalize relative to dry RMS to keep the effect subtle
+        dry_rms = float(np.sqrt(np.mean(np.square(data)))) or 1e-12
+        wet_rms = float(np.sqrt(np.mean(np.square(wet)))) or 1e-12
+        wet *= min(1.5, dry_rms / wet_rms)
+        np.clip(wet, -1.0, 1.0, out=wet)
+        return wet.astype("float32")
+
     def _queue_build(
         self,
         tempo_rate: float,
@@ -297,6 +340,8 @@ class AudioSession:
         include_mix: bool,
         base_stems: Dict[str, np.ndarray],
         base_mix: Optional[np.ndarray],
+        base_reverb_mix: Optional[np.ndarray],
+        build_reverb: bool,
         mark_missing: bool,
         log_callback=None,
         progress_callback=None,
@@ -344,18 +389,23 @@ class AudioSession:
                     completed += 1
 
                 new_mix = base_mix
+                new_reverb_mix = base_reverb_mix
+                mix_from_base = include_mix and base_mix is not None and not mark_missing
                 if include_mix and self.original_mix is not None:
-                    if progress_callback:
-                        progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
+                    if not mix_from_base:
+                        if progress_callback:
+                            progress_callback(
+                                completed / float(max(total_items, 1)),
+                                f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
+                            )
+                        new_mix = self._apply_tempo_pitch(
+                            data=self.original_mix,
+                            tempo_rate=tempo_rate,
+                            pitch_semitones=pitch_semitones,
+                            sr=sr,
                         )
-                    new_mix = self._apply_tempo_pitch(
-                        data=self.original_mix,
-                        tempo_rate=tempo_rate,
-                        pitch_semitones=pitch_semitones,
-                        sr=sr,
-                    )
+                    if build_reverb:
+                        new_reverb_mix = self._apply_reverb(new_mix, sr)
                     completed += 1
 
                 new_total_samples = self._compute_total_samples(new_stems, new_mix)
@@ -374,6 +424,7 @@ class AudioSession:
                     self.pending_tempo_rate = tempo_rate
                     self.pending_pitch_semitones = pitch_semitones
                     self.pending_total_samples = new_total_samples
+                    self.pending_reverb_mix_data = new_reverb_mix if build_reverb else None
                     self.pending_missing_stems = new_missing
                     self.pending_ready = True
 
@@ -402,6 +453,42 @@ class AudioSession:
 
     def set_play_all(self, value: bool):
         self.play_all = bool(value)
+
+    def set_reverb_enabled(self, enabled: bool, log_callback=None, progress_callback=None):
+        enabled = bool(enabled)
+        if enabled == self.reverb_enabled:
+            if enabled:
+                self.ensure_reverb_ready(log_callback=log_callback, progress_callback=progress_callback)
+            return
+
+        self.reverb_enabled = enabled
+        if enabled:
+            self.ensure_reverb_ready(log_callback=log_callback, progress_callback=progress_callback)
+
+    def set_reverb_balance(self, balance: float):
+        self.reverb_balance = max(-1.0, min(1.0, float(balance)))
+
+    def ensure_reverb_ready(self, log_callback=None, progress_callback=None):
+        if not self.reverb_enabled or self.sample_rate is None:
+            return
+        if self.original_mix is None or self.original_mix.size == 0:
+            return
+        if self.current_reverb_mix_data is not None and self.current_mix_data is not None:
+            return
+
+        self._queue_build(
+            tempo_rate=self.tempo_rate,
+            pitch_semitones=self.pitch_semitones,
+            stems_to_build=set(),
+            include_mix=True,
+            base_stems=dict(self.current_stem_data),
+            base_mix=self.current_mix_data,
+            base_reverb_mix=self.current_reverb_mix_data,
+            build_reverb=True,
+            mark_missing=False,
+            log_callback=log_callback,
+            progress_callback=progress_callback,
+        )
 
     def request_tempo_pitch_change(
         self,
@@ -456,6 +543,8 @@ class AudioSession:
             include_mix=bool(include_mix),
             base_stems={},
             base_mix=None,
+            base_reverb_mix=None,
+            build_reverb=self.reverb_enabled,
             mark_missing=True,
             log_callback=log_callback,
             progress_callback=progress_callback,
@@ -480,8 +569,14 @@ class AudioSession:
                 name for name in self.active_stems if name in self.original_stem_data
             }
 
+        if self.reverb_enabled:
+            include_mix = include_mix or (self.original_mix is not None and self.original_mix.size > 0)
+
         missing_stems = required_stems - set(self.current_stem_data.keys())
-        mix_missing = include_mix and self.current_mix_data is None
+        mix_missing = include_mix and (
+            self.current_mix_data is None
+            or (self.reverb_enabled and self.current_reverb_mix_data is None)
+        )
 
         if not missing_stems and not mix_missing:
             return
@@ -493,6 +588,8 @@ class AudioSession:
             include_mix=mix_missing,
             base_stems=dict(self.current_stem_data),
             base_mix=self.current_mix_data,
+            base_reverb_mix=self.current_reverb_mix_data,
+            build_reverb=self.reverb_enabled,
             mark_missing=True,
             log_callback=log_callback,
             progress_callback=progress_callback,
@@ -526,11 +623,13 @@ class AudioSession:
             self.tempo_rate = self.pending_tempo_rate
             self.pitch_semitones = self.pending_pitch_semitones
             self.total_samples = new_total_samples
+            self.current_reverb_mix_data = self.pending_reverb_mix_data
             self.current_missing_stems = set(self.pending_missing_stems)
 
             # Clear pending
             self.pending_stem_data = {}
             self.pending_mix_data = None
+            self.pending_reverb_mix_data = None
             self.pending_missing_stems = set()
             self.pending_total_samples = 0
             self.pending_ready = False
@@ -591,12 +690,12 @@ class AudioSession:
             return np.zeros(frames, dtype="float32")
 
         frames = min(frames, self.total_samples - start)
-        mix = np.zeros(frames, dtype="float32")
+        dry_mix = np.zeros(frames, dtype="float32")
 
         if self.play_all and self.current_mix_data is not None:
             segment = self.current_mix_data[start:start + frames]
             if segment.size > 0:
-                mix[:segment.size] += segment
+                dry_mix[:segment.size] += segment
         else:
             for name in list(self.active_stems):
                 data = self.current_stem_data.get(name)
@@ -605,9 +704,20 @@ class AudioSession:
                 segment = data[start:start + frames]
                 if segment.size == 0:
                     continue
-                mix[:segment.size] += segment
+                dry_mix[:segment.size] += segment
 
-        return mix
+        if self.reverb_enabled and self.current_reverb_mix_data is not None:
+            wet = np.zeros(frames, dtype="float32")
+            wet_segment = self.current_reverb_mix_data[start:start + frames]
+            if wet_segment.size > 0:
+                wet[:wet_segment.size] += wet_segment
+
+            balance = max(-1.0, min(self.reverb_balance, 1.0))
+            wet_weight = (1.0 + balance) / 2.0
+            dry_weight = 1.0 - wet_weight
+            return dry_mix * dry_weight + wet * wet_weight
+
+        return dry_mix
 
     # -------------------------------------------------------------------------
     # DURATION
