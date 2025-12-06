@@ -327,9 +327,13 @@ class YTDemucsApp:
         )
         menubar.add_cascade(label="View", menu=view_menu)
         self.root.config(menu=menubar)
-        self.root.bind("<Control-n>", self.on_new_window_shortcut)
-        self.root.bind("<Control-w>", self.on_close_window_shortcut)
-        self.root.bind("<Control-m>", self.on_master_shortcut)
+        for sequence, handler in (
+            ("<Control-n>", self.on_new_window_shortcut),
+            ("<Control-w>", self.on_close_window_shortcut),
+            ("<Control-m>", self.on_master_shortcut),
+            ("<Control-M>", self.on_master_shortcut),
+        ):
+            self.root.bind(sequence, handler)
 
     def on_new_window_shortcut(self, event=None):
         self.create_new_window()
@@ -338,7 +342,7 @@ class YTDemucsApp:
         self.close_window()
 
     def on_master_shortcut(self, event=None):
-        self.open_master_window()
+        self.toggle_master_window()
 
     def create_new_window(self):
         master = self.root if isinstance(self.root, tk.Tk) else (self.root.master or self.root)
@@ -391,6 +395,13 @@ class YTDemucsApp:
             return
 
         YTDemucsApp.master_window = MasterWindow(self)
+
+    def toggle_master_window(self):
+        existing = YTDemucsApp.master_window
+        if existing and existing.window.winfo_exists():
+            YTDemucsApp.close_master_window()
+        else:
+            self.open_master_window()
 
     @classmethod
     def close_master_window(cls):
@@ -1749,6 +1760,9 @@ class MasterWindow:
         self.window.title("Master")
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
+        for seq in ("<Control-m>", "<Control-M>", "<Control-w>", "<Control-W>"):
+            self.window.bind(seq, self.on_shortcut)
+
         self.table_frame = ttk.Frame(self.window, padding=10)
         self.table_frame.grid(row=0, column=0, sticky="nsew")
 
@@ -1770,6 +1784,13 @@ class MasterWindow:
 
         self.refresh_sessions()
         self.update_loop()
+
+    def on_shortcut(self, event=None):
+        if event and event.keysym.lower() == "w":
+            self.close()
+        else:
+            self.owner.toggle_master_window()
+        return "break"
 
     def close(self):
         try:
@@ -1799,7 +1820,9 @@ class MasterWindow:
 
     def build_session_column(self, app: YTDemucsApp) -> dict:
         frame = ttk.Frame(self.table_frame, padding=5)
-        name_label = ttk.Label(frame, text=app.get_session_display_name())
+        name_label = ttk.Label(
+            frame, text=self.format_session_name(app.get_session_display_name())
+        )
         name_label.grid(row=0, column=0, columnspan=2, pady=(0, 6))
 
         meter = ttk.Progressbar(
@@ -1972,7 +1995,9 @@ class MasterWindow:
             if not state:
                 continue
 
-            state["name_label"].config(text=app.get_session_display_name())
+            state["name_label"].config(
+                text=self.format_session_name(app.get_session_display_name())
+            )
 
             try:
                 level = max(0.0, min(app.player.get_output_level(), 1.0))
@@ -1997,4 +2022,10 @@ class MasterWindow:
         self.enforce_solo_rules()
         self.update_master_play_button()
         self.window.after(200, self.update_loop)
+
+    @staticmethod
+    def format_session_name(name: str, max_len: int = 12) -> str:
+        if len(name) <= max_len:
+            return name
+        return name[: max_len - 3] + "..."
 
