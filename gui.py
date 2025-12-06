@@ -1156,29 +1156,47 @@ class YTDemucsApp:
     def load_saved_session(self, session: SavedSession):
         self.append_log(f"Loading saved session: {session.display_name}")
         self.show_session_loading()
-        try:
-            self.clear_current_session()
-            self.full_mix_path = session.audio_path
-            self.current_title = session.title
-            self.song_key_text = session.song_key_text
-            self.current_pipeline_result = None
+        self.clear_current_session()
+        self.full_mix_path = session.audio_path
+        self.current_title = session.title
+        self.song_key_text = session.song_key_text
+        self.current_pipeline_result = None
 
-            if session.thumbnail_path:
-                self.set_thumbnail_from_file(session.thumbnail_path)
-            else:
-                self.thumbnail_label.configure(image="", text="No\nthumbnail")
+        if session.thumbnail_path:
+            self.set_thumbnail_from_file(session.thumbnail_path)
+        else:
+            self.thumbnail_label.configure(image="", text="No\nthumbnail")
 
-            window_title = session.title
-            self.root.after(0, lambda t=window_title: self.root.title(t))
-            self.root.after(0, lambda: self.setup_player(session.stems_dir))
-            self.root.after(0, lambda: self.notebook.select(self.playback_tab))
-            self.update_key_table()
-        finally:
-            self.hide_session_loading()
+        def worker():
+            try:
+                if session.stems_dir is None:
+                    preloaded = self.player.load_mix_only(session.audio_path)
+                else:
+                    preloaded = self.player.load_audio(session.stems_dir, session.audio_path)
+            except Exception as e:
+                self.append_log(f"Failed to load saved session: {e}")
+                self.root.after(0, self.hide_session_loading)
+                return
+
+            def _finish():
+                window_title = session.title
+                self.root.title(window_title)
+                self.notebook.select(self.playback_tab)
+                self.setup_player(session.stems_dir, preloaded=preloaded)
+                self.update_key_table()
+                self.hide_session_loading()
+
+            self.root.after(0, _finish)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ---------- player UI ----------
 
-    def setup_player(self, stems_dir: str | None):
+    def setup_player(
+        self,
+        stems_dir: str | None,
+        preloaded: tuple[list[str], dict[str, list[float]]] | None = None,
+    ):
         if not self.player.audio_ok:
             self.append_log("Audio playback not available (sounddevice init failed).")
             return
@@ -1212,11 +1230,16 @@ class YTDemucsApp:
 
         # load audio via player
         try:
-            if stems_dir is None:
-                # Skip separation mode: full mix only
-                stem_names, envelopes = self.player.load_mix_only(self.full_mix_path)
+            if preloaded is None:
+                if stems_dir is None:
+                    # Skip separation mode: full mix only
+                    stem_names, envelopes = self.player.load_mix_only(self.full_mix_path)
+                else:
+                    stem_names, envelopes = self.player.load_audio(
+                        stems_dir, self.full_mix_path
+                    )
             else:
-                stem_names, envelopes = self.player.load_audio(stems_dir, self.full_mix_path)
+                stem_names, envelopes = preloaded
         except Exception as e:
             self.append_log(f"Failed to load audio: {e}")
             return
