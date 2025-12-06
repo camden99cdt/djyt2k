@@ -2019,6 +2019,13 @@ class MasterWindow:
         base_font = tkfont.nametofont("TkDefaultFont")
         self.title_font = base_font.copy()
         self.title_font.configure(underline=True)
+        self.button_font = base_font.copy()
+        self.strike_button_font = base_font.copy()
+        self.strike_button_font.configure(overstrike=True)
+
+        self.master_styles = ttk.Style(self.window)
+        self.master_styles.configure("Master.Vertical.TProgressbar", thickness=18)
+        self.master_styles.configure("Master.Vertical.TScale", sliderlength=26)
 
         for seq in ("<Control-m>", "<Control-M>", "<Control-w>", "<Control-W>"):
             self.window.bind(seq, self.on_shortcut)
@@ -2038,12 +2045,21 @@ class MasterWindow:
 
         self.master_frame = ttk.Frame(content, padding=(0, 10, 10, 10))
         self.master_frame.grid(row=0, column=2, sticky="ns")
-        self.master_frame.columnconfigure(0, weight=1)
-        self.master_frame.columnconfigure(1, weight=1)
+        self.master_frame.columnconfigure(0, weight=1, minsize=54)
+        self.master_frame.columnconfigure(1, weight=1, minsize=54)
 
-        ttk.Label(self.master_frame, text="Master", font=self.title_font).grid(
-            row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6)
+        ttk.Label(
+            self.master_frame,
+            text="Master",
+            font=self.title_font,
+            anchor="center",
+            justify="center",
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
+
+        self.master_volume_label = ttk.Label(
+            self.master_frame, text="100%", anchor="center", justify="center"
         )
+        self.master_volume_label.grid(row=1, column=0, columnspan=2, pady=(0, 8))
 
         self.master_meter = ttk.Progressbar(
             self.master_frame,
@@ -2052,8 +2068,9 @@ class MasterWindow:
             maximum=1.0,
             value=0.0,
             length=160,
+            style="Master.Vertical.TProgressbar",
         )
-        self.master_meter.grid(row=1, column=0, sticky="ns", padx=(0, 6))
+        self.master_meter.grid(row=2, column=0, sticky="ns", padx=(0, 8), ipadx=2)
 
         self.master_volume_var = tk.DoubleVar(value=StemAudioPlayer.get_global_master_volume())
         self.master_volume_slider = ttk.Scale(
@@ -2064,24 +2081,31 @@ class MasterWindow:
             variable=self.master_volume_var,
             command=self.on_global_volume_change,
             length=180,
+            style="Master.Vertical.TScale",
         )
-        self.master_volume_slider.grid(row=1, column=1, sticky="ns")
-
-        self.master_volume_label = ttk.Label(self.master_frame, text="100%")
-        self.master_volume_label.grid(row=2, column=0, columnspan=2, pady=(6, 8))
+        self.master_volume_slider.grid(row=2, column=1, sticky="ns", ipadx=3)
 
         self.master_play_button = ttk.Button(
-            self.master_frame, text="Play All", command=self.on_master_play_pause
+            self.master_frame,
+            text="Play All",
+            command=self.on_master_play_pause,
+            width=len("Resume Paused"),
         )
         self.master_play_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
         self.master_mute_button = ttk.Button(
-            self.master_frame, text="Mute All", command=self.on_master_mute_all
+            self.master_frame,
+            text="Mute All",
+            command=self.on_master_mute_all,
+            width=len("Resume Paused"),
         )
         self.master_mute_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
         self.master_stop_button = ttk.Button(
-            self.master_frame, text="Stop All", command=self.on_master_stop_all
+            self.master_frame,
+            text="Stop All",
+            command=self.on_master_stop_all,
+            width=len("Resume Paused"),
         )
         self.master_stop_button.grid(row=5, column=0, columnspan=2, sticky="ew")
 
@@ -2163,10 +2187,22 @@ class MasterWindow:
         )
         slider.grid(row=2, column=1, sticky="ns")
 
-        mute_btn = ttk.Button(frame, text="M", command=lambda a=app: self.toggle_mute(a))
+        mute_btn = ttk.Button(
+            frame,
+            text="M",
+            command=lambda a=app: self.toggle_mute(a),
+            width=3,
+        )
+        mute_btn.configure(font=self.button_font)
         mute_btn.grid(row=3, column=0, sticky="ew", pady=(8, 2))
 
-        solo_btn = ttk.Button(frame, text="S", command=lambda a=app: self.toggle_solo(a))
+        solo_btn = ttk.Button(
+            frame,
+            text="S",
+            command=lambda a=app: self.toggle_solo(a),
+            width=3,
+        )
+        solo_btn.configure(font=self.button_font)
         solo_btn.grid(row=3, column=1, sticky="ew", pady=(8, 2))
 
         play_btn = ttk.Button(frame, text="Play", command=lambda a=app: self.toggle_session_play(a))
@@ -2175,8 +2211,8 @@ class MasterWindow:
         stop_btn = ttk.Button(frame, text="Stop", command=lambda a=app: self.stop_session(a))
         stop_btn.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(2, 0))
 
-        frame.columnconfigure(0, weight=1)
-        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=0, minsize=44)
+        frame.columnconfigure(1, weight=0, minsize=44)
 
         return {
             "frame": frame,
@@ -2216,7 +2252,7 @@ class MasterWindow:
 
         if volume > 0.0 and state.get("muted"):
             state["muted"] = False
-            state["mute_btn"].config(text="Mute")
+            state["mute_btn"].config(text="M", font=self.button_font)
             state["saved_volume"] = None
             self.master_muted_sessions.discard(app)
             self.enforce_solo_rules()
@@ -2236,14 +2272,14 @@ class MasterWindow:
                 return
             state["saved_volume"] = app.get_master_volume() or 1.0
             state["muted"] = True
-            state["mute_btn"].config(text="Unmute")
+            state["mute_btn"].config(text="M", font=self.strike_button_font)
             self.set_session_volume(app, 0.0)
         else:
             if not state.get("muted"):
                 return
             restore = state.get("saved_volume", app.get_master_volume() or 1.0)
             state["muted"] = False
-            state["mute_btn"].config(text="Mute")
+            state["mute_btn"].config(text="M", font=self.button_font)
             state["saved_volume"] = None
             self.set_session_volume(app, restore)
             self.master_muted_sessions.discard(app)
@@ -2271,7 +2307,9 @@ class MasterWindow:
     def enforce_solo_rules(self):
         for app, state in self.session_states.items():
             is_target = app is self.solo_target
-            state["solo_btn"].config(text="Unsolo" if is_target else "Solo")
+            state["solo_btn"].config(
+                text="S", font=self.strike_button_font if is_target else self.button_font
+            )
 
             if self.solo_target is None:
                 if not state.get("muted") and state.get("solo_restore_volume") is not None:
