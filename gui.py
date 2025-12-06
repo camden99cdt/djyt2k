@@ -377,6 +377,7 @@ class YTDemucsApp:
 
         # saved sessions UI wiring
         self.saved_sessions_listbox.bind("<<ListboxSelect>>", self.on_saved_session_select)
+        self.saved_sessions_listbox.bind("<Control-n>", self.on_saved_sessions_ctrl_n)
         self.refresh_saved_sessions_list()
         self.update_save_button_state()
 
@@ -1066,6 +1067,10 @@ class YTDemucsApp:
         self.selected_saved_session_id = session.session_id
         self.update_save_button_state()
         self.load_saved_session(session)
+
+    def on_saved_sessions_ctrl_n(self, event=None):
+        self.on_new_window_shortcut()
+        return "break"
 
     def on_save_or_delete(self):
         if self.selected_saved_session_id:
