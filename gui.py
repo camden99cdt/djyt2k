@@ -388,7 +388,7 @@ class YTDemucsApp:
             title = data.get("title") or "Untitled"
             duration = self.format_duration_from_seconds(data.get("duration"))
             published = self.format_time_ago(data)
-            thumb_url = data.get("thumbnail")
+            thumb_url = self.select_thumbnail_url(data)
             thumb_bytes = self.fetch_thumbnail_bytes(thumb_url) if thumb_url else None
 
             if url:
@@ -406,6 +406,26 @@ class YTDemucsApp:
                 break
 
         return results
+
+    @staticmethod
+    def select_thumbnail_url(data: dict) -> str | None:
+        if not isinstance(data, dict):
+            return None
+
+        thumb_url = data.get("thumbnail")
+        if thumb_url:
+            return thumb_url
+
+        thumbs = data.get("thumbnails")
+        if isinstance(thumbs, list):
+            for entry in reversed(thumbs):
+                if not isinstance(entry, dict):
+                    continue
+                url = entry.get("url") or entry.get("thumbnail")
+                if url:
+                    return url
+
+        return None
 
     @staticmethod
     def format_duration_from_seconds(seconds) -> str:
