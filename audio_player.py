@@ -11,6 +11,7 @@ from playback_engine import PlaybackEngine
 
 
 class StemAudioPlayer:
+    global_master_volume: float = 1.0
     """
     High-level interface used by the GUI.
 
@@ -44,6 +45,16 @@ class StemAudioPlayer:
         self.play_index: int = 0
         self.is_playing: bool = False
         self.is_paused: bool = False
+
+    # ---------- global master volume ----------
+
+    @classmethod
+    def set_global_master_volume(cls, volume: float):
+        cls.global_master_volume = max(0.0, min(float(volume), 1.0))
+
+    @classmethod
+    def get_global_master_volume(cls) -> float:
+        return cls.global_master_volume
 
     # ---------- loading wrappers ----------
 
@@ -220,7 +231,7 @@ class StemAudioPlayer:
 
         # Apply master volume and clip
         gain = 10 ** (self.gain_db / 20.0)
-        chunk = chunk * self.master_volume * gain
+        chunk = chunk * self.master_volume * gain * self.global_master_volume
         try:
             self.output_level = float(np.sqrt(np.mean(np.square(chunk))))
         except Exception:
