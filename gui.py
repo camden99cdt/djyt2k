@@ -135,17 +135,20 @@ class YTDemucsApp:
         meters_stack.columnconfigure(0, weight=1)
         meters_stack.columnconfigure(1, weight=1)
         meters_stack.rowconfigure(0, weight=1)
-        meters_stack.rowconfigure(1, weight=0)
+        meter_column = ttk.Frame(meters_stack)
+        meter_column.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        meter_column.columnconfigure(0, weight=1)
+        meter_column.rowconfigure(0, weight=0)
 
         self.audio_meter = ttk.Progressbar(
-            meters_stack,
+            meter_column,
             mode="determinate",
             maximum=60.0,  # dBFS scale, updated dynamically
             length=220,
             orient="vertical",
             style="red.Horizontal.TProgressbar",
         )
-        self.audio_meter.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.audio_meter.grid(row=0, column=0)
 
         self.audio_meter_label = ttk.Label(
             meters_stack,
@@ -156,9 +159,9 @@ class YTDemucsApp:
 
         self.volume_container = ttk.Frame(meters_stack)
         self.volume_container.grid(row=0, column=1, sticky="nsew", rowspan=2)
-        self.volume_container.rowconfigure(0, weight=1)
-        self.volume_container.rowconfigure(1, weight=0)
         self.volume_container.columnconfigure(0, weight=1)
+        self.volume_container.rowconfigure(0, weight=1)
+        self.volume_container.columnconfigure(2, weight=1)
 
         right_column = ttk.Frame(top_row)
         right_column.grid(row=0, column=1, sticky="nsew")
@@ -285,7 +288,7 @@ class YTDemucsApp:
         right_bottom = ttk.Frame(right_column)
         right_bottom.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         right_bottom.columnconfigure(0, weight=1)
-        right_bottom.rowconfigure(3, weight=0)
+        right_bottom.rowconfigure(4, weight=0)
 
         ttk.Separator(right_bottom, orient="horizontal").grid(
             row=0, column=0, sticky="ew", pady=(0, 6)
@@ -302,8 +305,8 @@ class YTDemucsApp:
         self.pitch_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         self.pitch_frame.columnconfigure(1, weight=1)
 
-        self.player_frame = ttk.Frame(self.playback_container)
-        self.player_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        self.player_frame = ttk.Frame(right_bottom)
+        self.player_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
 
         self.sessions_tab.columnconfigure(0, weight=7, uniform="sessions")
         self.sessions_tab.columnconfigure(1, weight=3, uniform="sessions")
@@ -1200,7 +1203,7 @@ class YTDemucsApp:
 
         if should_show_player:
             if not self.player_frame.winfo_manager():
-                self.player_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+                self.player_frame.grid(row=4, column=0, sticky="nsew", pady=(10, 0))
         else:
             if self.player_frame.winfo_manager():
                 self.player_frame.grid_remove()
@@ -1420,19 +1423,19 @@ class YTDemucsApp:
 
         # master volume (left column, vertical)
         self.volume_label = ttk.Label(self.volume_container, text="100%")
-        self.volume_label.grid(row=1, column=0, pady=(6, 0))
+        self.volume_label.grid(row=1, column=1, pady=(6, 0))
 
         self.volume_var = tk.DoubleVar(value=1.0)
         self.volume_slider = ttk.Scale(
             self.volume_container,
-            from_=0.0,
-            to=1.0,
+            from_=1.0,
+            to=0.0,
             orient="vertical",
             variable=self.volume_var,
             command=self.on_volume_change,
             length=220,
         )
-        self.volume_slider.grid(row=0, column=0, sticky="nsew")
+        self.volume_slider.grid(row=0, column=1, sticky="ns")
         self.playback_control_widgets.append(self.volume_slider)
         self.playback_label_widgets.append(self.volume_label)
 
@@ -1871,7 +1874,7 @@ class YTDemucsApp:
         self.thumbnail_image = None
         self.thumbnail_label.configure(image="", text="No\nthumbnail")
         self.gain_var.set(0.0)
-        self.gain_label.config(text="+0.0 dB")
+        self.gain_label.config(text="+0 dB")
         self.audio_meter.configure(value=0.0)
         self.audio_meter_label.config(text="-∞ dB")
         self.player.set_gain_db(0.0)
@@ -2505,7 +2508,7 @@ class MasterWindow:
         time_label.grid(row=1, column=0, columnspan=2, pady=(0, 6))
 
         meter = ttk.Progressbar(
-            frame, orient="vertical", mode="determinate", maximum=1.0, value=0.0, length=120
+            frame, orient="vertical", mode="determinate", maximum=0.6, value=0.0, length=120
         )
         meter.grid(row=2, column=0, sticky="ns", padx=(0, 6))
 
