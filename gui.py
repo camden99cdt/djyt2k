@@ -185,7 +185,7 @@ class YTDemucsApp:
         self.reverb_mix_var = tk.DoubleVar(value=0.45)
 
         reverb_frame = ttk.Frame(sliders_column)
-        reverb_frame.grid(row=0, column=0, sticky="nsew")
+        reverb_frame.grid(row=0, column=0, sticky="ew")
         reverb_frame.rowconfigure(1, weight=1)
         reverb_frame.columnconfigure(0, weight=1)
 
@@ -201,18 +201,17 @@ class YTDemucsApp:
             reverb_frame,
             from_=0.0,
             to=1.0,
-            orient="vertical",
             variable=self.reverb_mix_var,
             command=self.on_reverb_mix_change,
             length=200,
         )
-        self.reverb_mix_slider.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
+        self.reverb_mix_slider.grid(row=1, column=0, sticky="ew", pady=(6, 6))
 
         self.reverb_mix_label = ttk.Label(reverb_frame, text="45% wet")
         self.reverb_mix_label.grid(row=2, column=0, pady=(0, 6))
 
         gain_frame = ttk.Frame(sliders_column)
-        gain_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        gain_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         gain_frame.rowconfigure(1, weight=1)
         gain_frame.columnconfigure(0, weight=1)
 
@@ -228,7 +227,6 @@ class YTDemucsApp:
             gain_frame,
             from_=-10.0,
             to=10.0,
-            orient="vertical",
             variable=self.gain_var,
             command=self.on_gain_change,
             length=200,
