@@ -191,6 +191,7 @@ class YTDemucsApp:
         reverb_frame.grid(row=0, column=0, sticky="ew")
         reverb_frame.rowconfigure(1, weight=1)
         reverb_frame.columnconfigure(0, weight=1)
+        reverb_frame.columnconfigure(1, weight=1)
 
         self.reverb_checkbox = ttk.Checkbutton(
             reverb_frame,
@@ -200,6 +201,9 @@ class YTDemucsApp:
         )
         self.reverb_checkbox.grid(row=0, column=0, sticky="w")
 
+        self.reverb_mix_label = ttk.Label(reverb_frame, text="45% wet")
+        self.reverb_mix_label.grid(row=0, column=1, sticky="e")
+
         self.reverb_mix_slider = ttk.Scale(
             reverb_frame,
             from_=0.0,
@@ -208,15 +212,13 @@ class YTDemucsApp:
             command=self.on_reverb_mix_change,
             length=200,
         )
-        self.reverb_mix_slider.grid(row=1, column=0, sticky="ew", pady=(6, 6))
-
-        self.reverb_mix_label = ttk.Label(reverb_frame, text="45% wet")
-        self.reverb_mix_label.grid(row=2, column=0, pady=(0, 6))
+        self.reverb_mix_slider.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 6))
 
         gain_frame = ttk.Frame(sliders_column)
         gain_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         gain_frame.rowconfigure(1, weight=1)
         gain_frame.columnconfigure(0, weight=1)
+        gain_frame.columnconfigure(1, weight=1)
 
         self.gain_title_label = ttk.Label(gain_frame, text="Gain")
         self.gain_title_label.grid(row=0, column=0, sticky="w")
@@ -226,6 +228,8 @@ class YTDemucsApp:
             gain_frame, text="+0.0 dB", style="DisabledPlayback.TLabel"
         )
 
+        self.gain_label.grid(row=0, column=1, sticky="e")
+
         self.gain_slider = ttk.Scale(
             gain_frame,
             from_=-10.0,
@@ -234,9 +238,8 @@ class YTDemucsApp:
             command=self.on_gain_change,
             length=200,
         )
-        self.gain_slider.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
+        self.gain_slider.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(6, 6))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
-        self.gain_label.grid(row=2, column=0, sticky="w")
         self.playback_label_widgets.append(self.gain_title_label)
 
         ttk.Separator(right_top, orient="vertical").grid(
