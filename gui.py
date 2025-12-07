@@ -2424,6 +2424,8 @@ class YTDemucsApp:
 
     def update_playback_ui(self):
         try:
+            self.player.apply_pending_tempo_pitch()
+
             # Always get the true duration from the audio engine
             duration = self.player.get_duration()
             self.waveform_duration = duration
@@ -3103,6 +3105,8 @@ class MasterWindow:
             state = self.session_states.get(app)
             if not state:
                 continue
+
+            app.player.apply_pending_tempo_pitch()
 
             state["name_label"].config(
                 text=self.format_session_name(app.get_session_display_name())
