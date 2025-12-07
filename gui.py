@@ -59,12 +59,10 @@ class YTDemucsApp:
 
         self.youtube_tab = ttk.Frame(self.notebook, padding=10)
         self.playback_tab = ttk.Frame(self.notebook, padding=10)
-        self.harmonics_tab = ttk.Frame(self.notebook, padding=10)
         self.sessions_tab = ttk.Frame(self.notebook, padding=10)
 
         self.notebook.add(self.youtube_tab, text="YouTube")
         self.notebook.add(self.playback_tab, text="Playback")
-        self.notebook.add(self.harmonics_tab, text="Harmonics")
         self.notebook.add(self.sessions_tab, text="Sessions")
 
         ttk.Label(self.youtube_tab, text="YouTube URL:").grid(row=0, column=0, sticky="w")
@@ -99,102 +97,194 @@ class YTDemucsApp:
         scrollbar.grid(row=4, column=3, sticky="ns")
         self.log_text["yscrollcommand"] = scrollbar.set
 
-        playback_top = ttk.Frame(self.playback_tab)
-        playback_top.grid(row=0, column=0, sticky="nsew")
-        playback_top.columnconfigure(1, weight=1)
+        self.playback_tab.rowconfigure(0, weight=1)
+        self.playback_tab.columnconfigure(0, weight=1)
+
+        playback_container = ttk.Frame(self.playback_tab)
+        playback_container.grid(row=0, column=0, sticky="nsew")
+        playback_container.rowconfigure(0, weight=1)
+        playback_container.rowconfigure(1, weight=0)
+        playback_container.columnconfigure(0, weight=1)
+        self.playback_container = playback_container
+
+        top_row = ttk.Frame(playback_container)
+        top_row.grid(row=0, column=0, sticky="nsew")
+        top_row.columnconfigure(0, weight=0)
+        top_row.columnconfigure(1, weight=1)
+        top_row.rowconfigure(0, weight=1)
+
+        left_column = ttk.Frame(top_row)
+        left_column.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        left_column.rowconfigure(0, weight=0)
+        left_column.rowconfigure(1, weight=1)
 
         self.thumbnail_label = ttk.Label(
-            playback_top,
+            left_column,
             text="No\nthumbnail",
             justify="center",
             style="DisabledPlayback.TLabel",
         )
-        self.thumbnail_label.grid(row=0, column=0, rowspan=3, sticky="nsew", padx=(0, 10))
+        self.thumbnail_label.grid(row=0, column=0, sticky="nsew")
 
-        meter_frame = ttk.Frame(playback_top)
-        meter_frame.grid(row=0, column=1, sticky="ew")
-        meter_frame.columnconfigure(1, weight=1)
-        meter_frame.columnconfigure(2, weight=1)
-
-        self.audio_meter_label = ttk.Label(meter_frame, text="-∞ dB", style="DisabledPlayback.TLabel")
-        self.audio_meter_label.grid(row=0, column=0, pady=(8, 0))
+        meters_stack = ttk.Frame(left_column)
+        meters_stack.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        meters_stack.columnconfigure(0, weight=1)
+        meters_stack.columnconfigure(1, weight=1)
+        meters_stack.rowconfigure(0, weight=1)
+        meters_stack.rowconfigure(1, weight=0)
 
         self.audio_meter = ttk.Progressbar(
-            meter_frame,
+            meters_stack,
             mode="determinate",
-            maximum=1.0,
-            value=0.0,
-            length=260,
+            maximum=60.0,  # dBFS scale, updated dynamically
+            length=220,
+            orient="vertical",
+            style="red.Horizontal.TProgressbar",
         )
-        self.audio_meter.grid(row=0, column=1, sticky="ew", columnspan=2, pady=(8, 0))
+        self.audio_meter.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
-        self.gain_var = tk.DoubleVar(value=0.0)
-        self.gain_label = ttk.Label(meter_frame, text="+0.0 dB", style="DisabledPlayback.TLabel")
-        self.gain_label.grid(row=1, column=0, pady=(8, 0))
-        self.gain_slider = ttk.Scale(
-            meter_frame,
-            from_=-10.0,
-            to=10.0,
-            orient="horizontal",
-            variable=self.gain_var,
-            command=self.on_gain_change,
-            length=280,
+        self.audio_meter_label = ttk.Label(
+            meters_stack,
+            text="-∞ dB",
+            style="DisabledPlayback.TLabel",
         )
-        self.gain_slider.grid(row=1, column=1,  sticky="ew", columnspan=2, pady=(8, 0))
-        self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
+        self.audio_meter_label.grid(row=1, column=0, pady=(6, 0))
+
+        self.volume_container = ttk.Frame(meters_stack)
+        self.volume_container.grid(row=0, column=1, sticky="nsew", rowspan=2)
+        self.volume_container.rowconfigure(0, weight=1)
+        self.volume_container.rowconfigure(1, weight=0)
+        self.volume_container.columnconfigure(0, weight=1)
+
+        right_column = ttk.Frame(top_row)
+        right_column.grid(row=0, column=1, sticky="nsew")
+        right_column.rowconfigure(0, weight=1)
+        right_column.rowconfigure(1, weight=0)
+        right_column.columnconfigure(0, weight=1)
+
+        right_top = ttk.Frame(right_column)
+        right_top.grid(row=0, column=0, sticky="nsew")
+        right_top.columnconfigure(0, weight=1)
+        right_top.columnconfigure(2, weight=0)
+        right_top.rowconfigure(0, weight=1)
+
+        sliders_column = ttk.Frame(right_top)
+        sliders_column.grid(row=0, column=0, sticky="nsew")
+        sliders_column.columnconfigure(0, weight=1)
+        sliders_column.rowconfigure(0, weight=1)
+        sliders_column.rowconfigure(1, weight=1)
 
         self.reverb_enabled_var = tk.BooleanVar(value=False)
         self.reverb_mix_var = tk.DoubleVar(value=0.45)
+
+        reverb_frame = ttk.Frame(sliders_column)
+        reverb_frame.grid(row=0, column=0, sticky="nsew")
+        reverb_frame.rowconfigure(1, weight=1)
+        reverb_frame.columnconfigure(0, weight=1)
+
         self.reverb_checkbox = ttk.Checkbutton(
-            meter_frame,
+            reverb_frame,
             text="Reverb",
             variable=self.reverb_enabled_var,
             command=self.on_reverb_toggle,
         )
-        self.reverb_checkbox.grid(row=2, column=0, pady=(10, 0), sticky="w")
-
-        self.reverb_mix_label = ttk.Label(meter_frame, text="45% wet")
-        self.reverb_mix_label.grid(row=2, column=2, pady=(10, 0), sticky="e")
+        self.reverb_checkbox.grid(row=0, column=0, sticky="w")
 
         self.reverb_mix_slider = ttk.Scale(
-            meter_frame,
+            reverb_frame,
             from_=0.0,
             to=1.0,
-            orient="horizontal",
+            orient="vertical",
             variable=self.reverb_mix_var,
             command=self.on_reverb_mix_change,
-            length=280,
+            length=200,
         )
-        self.reverb_mix_slider.grid(row=2, column=1, sticky="ew", pady=(10, 0))
+        self.reverb_mix_slider.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
 
-        self.harmonics_tab.columnconfigure(0, weight=1)
-        self.harmonics_tab.rowconfigure(0, weight=1)
-        harmonics_frame = ttk.Frame(self.harmonics_tab)
-        harmonics_frame.grid(row=0, column=0, sticky="nsew")
-        for col in range(6):
-            harmonics_frame.columnconfigure(col, weight=1)
+        self.reverb_mix_label = ttk.Label(reverb_frame, text="45% wet")
+        self.reverb_mix_label.grid(row=2, column=0, pady=(0, 6))
+
+        gain_frame = ttk.Frame(sliders_column)
+        gain_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        gain_frame.rowconfigure(1, weight=1)
+        gain_frame.columnconfigure(0, weight=1)
+
+        gain_title_label = ttk.Label(gain_frame, text="Gain")
+        gain_title_label.grid(row=0, column=0, sticky="w")
+
+        self.gain_var = tk.DoubleVar(value=0.0)
+        self.gain_label = ttk.Label(
+            gain_frame, text="+0.0 dB", style="DisabledPlayback.TLabel"
+        )
+
+        self.gain_slider = ttk.Scale(
+            gain_frame,
+            from_=-10.0,
+            to=10.0,
+            orient="vertical",
+            variable=self.gain_var,
+            command=self.on_gain_change,
+            length=200,
+        )
+        self.gain_slider.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
+        self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
+        self.gain_label.grid(row=2, column=0, sticky="w")
+        self.playback_label_widgets.append(gain_title_label)
+
+        ttk.Separator(right_top, orient="vertical").grid(
+            row=0, column=1, sticky="ns", padx=10
+        )
+
+        harmonics_frame = ttk.Frame(right_top)
+        harmonics_frame.grid(row=0, column=2, sticky="nsew")
+        harmonics_frame.columnconfigure(0, weight=0)
+        harmonics_frame.columnconfigure(1, weight=1)
 
         self.key_table_headers: list[ttk.Label] = []
         self.key_table_value_labels: dict[str, ttk.Label] = {}
 
-        headers = ["Key", "+1", "-1", "Rel", "Sub", "Dom"]
-        value_keys = [
-            "current",
-            "plus_one",
-            "minus_one",
-            "relative",
-            "subdominant",
-            "dominant",
+        harmonics_rows = [
+            ("Key", "current"),
+            ("+1", "plus_one"),
+            ("-1", "minus_one"),
+            ("Rel", "relative"),
+            ("Sub", "subdominant"),
+            ("Dom", "dominant"),
         ]
-        for idx, text in enumerate(headers):
-            lbl = ttk.Label(harmonics_frame, text=text, anchor="center", justify="center")
-            lbl.grid(row=0, column=idx, sticky="ew")
-            self.key_table_headers.append(lbl)
 
-        for idx, key in enumerate(value_keys):
-            lbl = ttk.Label(harmonics_frame, text="N/A", anchor="center", justify="center")
-            lbl.grid(row=1, column=idx, sticky="ew", pady=(4, 0))
-            self.key_table_value_labels[key] = lbl
+        for idx, (title, value_key) in enumerate(harmonics_rows):
+            header = ttk.Label(harmonics_frame, text=title, anchor="w")
+            header.grid(row=idx, column=0, sticky="w", pady=(0, 4))
+            self.key_table_headers.append(header)
+
+            value_lbl = ttk.Label(
+                harmonics_frame, text="N/A", anchor="e", justify="right"
+            )
+            value_lbl.grid(row=idx, column=1, sticky="e", pady=(0, 4), padx=(10, 0))
+            self.key_table_value_labels[value_key] = value_lbl
+
+        right_bottom = ttk.Frame(right_column)
+        right_bottom.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        right_bottom.columnconfigure(0, weight=1)
+        right_bottom.rowconfigure(3, weight=0)
+
+        ttk.Separator(right_bottom, orient="horizontal").grid(
+            row=0, column=0, sticky="ew", pady=(0, 6)
+        )
+
+        self.stems_frame = ttk.Frame(right_bottom)
+        self.stems_frame.grid(row=1, column=0, sticky="w")
+
+        self.speed_frame = ttk.Frame(right_bottom)
+        self.speed_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.speed_frame.columnconfigure(1, weight=1)
+
+        self.pitch_frame = ttk.Frame(right_bottom)
+        self.pitch_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        self.pitch_frame.columnconfigure(1, weight=1)
+
+        self.player_frame = ttk.Frame(self.playback_container)
+        self.player_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
 
         self.sessions_tab.columnconfigure(0, weight=7, uniform="sessions")
         self.sessions_tab.columnconfigure(1, weight=3, uniform="sessions")
@@ -332,9 +422,6 @@ class YTDemucsApp:
         )
         self.save_delete_button.grid(row=12, column=0, sticky="ew", pady=(10, 0))
 
-        self.player_frame = ttk.Frame(main_frame)
-        self.player_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-
         root.rowconfigure(0, weight=1)
         root.columnconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
@@ -363,6 +450,7 @@ class YTDemucsApp:
         self.loop_button: ttk.Button | None = None
         self.volume_label: ttk.Label | None = None
         self.volume_var: tk.DoubleVar | None = None
+        self.volume_slider: ttk.Scale | None = None
         self.speed_var: tk.DoubleVar | None = None
         self.speed_label: ttk.Label | None = None
         self.pitch_var: tk.DoubleVar | None = None
@@ -1107,7 +1195,7 @@ class YTDemucsApp:
 
         if should_show_player:
             if not self.player_frame.winfo_manager():
-                self.player_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+                self.player_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         else:
             if self.player_frame.winfo_manager():
                 self.player_frame.grid_remove()
@@ -1257,6 +1345,14 @@ class YTDemucsApp:
         # clear UI
         for w in self.player_frame.winfo_children():
             w.destroy()
+        for frame in (
+            self.stems_frame,
+            self.speed_frame,
+            self.pitch_frame,
+            self.volume_container,
+        ):
+            for child in frame.winfo_children():
+                child.destroy()
 
         self.wave_canvas = None
         self.wave_cursor_id = None
@@ -1266,6 +1362,7 @@ class YTDemucsApp:
         self.loop_button = None
         self.volume_var = None
         self.volume_label = None
+        self.volume_slider = None
         self.speed_var = None
         self.speed_label = None
         self.pitch_var = None
@@ -1315,37 +1412,29 @@ class YTDemucsApp:
 
         self.set_playback_controls_state(True)
 
-        # waveform canvas
-        self.wave_canvas = tk.Canvas(
-            self.player_frame,
-            height=80,
-            bg="#202020",
-            highlightthickness=1,
-            relief="sunken",
+        # master volume (left column, vertical)
+        self.volume_label = ttk.Label(self.volume_container, text="100%")
+        self.volume_label.grid(row=1, column=0, pady=(6, 0))
+
+        self.volume_var = tk.DoubleVar(value=1.0)
+        self.volume_slider = ttk.Scale(
+            self.volume_container,
+            from_=0.0,
+            to=1.0,
+            orient="vertical",
+            variable=self.volume_var,
+            command=self.on_volume_change,
+            length=220,
         )
-        self.wave_canvas.grid(
-            row=0,
-            column=0,
-            columnspan=max(6, len(stem_names) + 2),
-            sticky="ew",
-            pady=(0, 5),
-        )
-        self.player_frame.columnconfigure(0, weight=1)
-        self.wave_canvas.bind("<Configure>", self.on_waveform_configure)
-        self.wave_canvas.bind("<Button-1>", self.on_waveform_click)
+        self.volume_slider.grid(row=0, column=0, sticky="nsew")
+        self.playback_control_widgets.append(self.volume_slider)
+        self.playback_label_widgets.append(self.volume_label)
 
         # stem checkboxes (only if we actually have stems)
-        stems_frame = ttk.Frame(self.player_frame)
-        stems_frame.grid(
-            row=1,
-            column=0,
-            columnspan=max(6, len(stem_names) + 2),
-        )
-
         for idx, stem_name in enumerate(stem_names):
             var = tk.BooleanVar(value=True)
             cb = ttk.Checkbutton(
-                stems_frame,
+                self.stems_frame,
                 text=stem_name,
                 variable=var,
                 command=self.on_stem_toggle,
@@ -1356,7 +1445,7 @@ class YTDemucsApp:
         # "All" checkbox (full mix)
         self.all_var = tk.BooleanVar(value=(stems_dir is None))
         cb_all = ttk.Checkbutton(
-            stems_frame,
+            self.stems_frame,
             text="All",
             variable=self.all_var,
             command=self.on_all_toggle,
@@ -1367,109 +1456,128 @@ class YTDemucsApp:
         if not stem_names:
             self.player.set_play_all(True)
 
-        # time label + controls
+        # playback speed (row in right column)
+        self.speed_var = tk.DoubleVar(value=1.0)
+        self.speed_label = ttk.Label(self.speed_frame, text="1.00x")
+        self.speed_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
-        # Columns 1–5: buttons – equal size, minimum 160px each
-        # Column 0: time label — inflexible (no stretch)
-        self.player_frame.columnconfigure(0, weight=0)
+        speed_slider = ttk.Scale(
+            self.speed_frame,
+            from_=0.25,
+            to=2.0,
+            orient="horizontal",
+            variable=self.speed_var,
+            command=self.on_speed_drag,   # update label while dragging
+            length=320,
+        )
+        speed_slider.grid(row=0, column=1, sticky="ew")
+        speed_slider.bind("<ButtonRelease-1>", self.on_speed_release)
+        self.playback_control_widgets.append(speed_slider)
+        self.playback_label_widgets.append(self.speed_label)
 
-        # Columns 1–5: buttons — flexible, equal width, with a min size
+        # pitch (row in right column) – semitones, -6..+6, 1.0 steps
+        self.pitch_var = tk.DoubleVar(value=0)
+        initial_pitch = 0
+        self.pitch_label = ttk.Label(
+            self.pitch_frame,
+            width=12,
+            text=self.format_pitch_label(initial_pitch)
+        )
+        self.pitch_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        pitch_slider = ttk.Scale(
+            self.pitch_frame,
+            from_=-6.0,
+            to=6.0,
+            orient="horizontal",
+            variable=self.pitch_var,
+            command=self.on_pitch_drag,
+            length=320,
+        )
+        pitch_slider.grid(row=0, column=1, sticky="ew")
+        pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
+        self.playback_control_widgets.append(pitch_slider)
+        self.playback_label_widgets.append(self.pitch_label)
+
+        # waveform canvas (bottom row)
+        self.player_frame.columnconfigure(0, weight=1)
+        self.wave_canvas = tk.Canvas(
+            self.player_frame,
+            height=80,
+            bg="#202020",
+            highlightthickness=1,
+            relief="sunken",
+        )
+        self.wave_canvas.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        self.wave_canvas.bind("<Configure>", self.on_waveform_configure)
+        self.wave_canvas.bind("<Button-1>", self.on_waveform_click)
+
+        transport_frame = ttk.Frame(self.player_frame)
+        transport_frame.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+        transport_frame.columnconfigure(0, weight=0)
         for col in range(1, 6):
-            self.player_frame.columnconfigure(
+            transport_frame.columnconfigure(
                 col,
                 weight=1,
                 minsize=40,
                 uniform="buttons",
             )
 
-        self.time_label = ttk.Label(self.player_frame, text="00:00 / 00:00")
-        # No sticky -> it keeps its natural (requested) size
-        self.time_label.grid(row=2, column=0, pady=(5, 0))
+        self.time_label = ttk.Label(transport_frame, text="00:00 / 00:00")
+        self.time_label.grid(row=0, column=0, padx=(0, 8))
 
         self.play_pause_button = ttk.Button(
-            self.player_frame, text="Play", command=self.on_play_pause
+            transport_frame, text="Play", command=self.on_play_pause
         )
-        self.play_pause_button.grid(row=2, column=1, pady=(5, 0), sticky="nsew")
+        self.play_pause_button.grid(row=0, column=1, sticky="nsew")
 
         self.stop_button = ttk.Button(
-            self.player_frame, text="Stop", command=self.on_stop
+            transport_frame, text="Stop", command=self.on_stop
         )
-        self.stop_button.grid(row=2, column=2, pady=(5, 0), sticky="nsew")
+        self.stop_button.grid(row=0, column=2, sticky="nsew")
 
         self.loop_button = ttk.Button(
-            self.player_frame, text="Loop", command=self.on_toggle_loop
+            transport_frame, text="Loop", command=self.on_toggle_loop
         )
-        self.loop_button.grid(row=2, column=3, pady=(5, 0), sticky="nsew")
+        self.loop_button.grid(row=0, column=3, sticky="nsew")
 
         reset_button = ttk.Button(
-            self.player_frame, text="Reset", command=self.on_reset_playback
+            transport_frame, text="Reset", command=self.on_reset_playback
         )
-        reset_button.grid(row=2, column=4, pady=(5, 0), sticky="nsew")
+        reset_button.grid(row=0, column=4, sticky="nsew")
 
         clear_button = ttk.Button(
-            self.player_frame, text="Clear", command=self.on_clear_app
+            transport_frame, text="Clear", command=self.on_clear_app
         )
-        clear_button.grid(row=2, column=5, pady=(5, 0), sticky="nsew")
+        clear_button.grid(row=0, column=5, sticky="nsew")
 
         self.update_loop_button()
 
-        # master volume (row 3) – wider slider via length
-        self.volume_label = ttk.Label(self.player_frame, text="100%")
-        self.volume_label.grid(
-            row=3, column=0, pady=(5, 0)
+        ttk.Separator(self.player_frame, orient="horizontal").grid(
+            row=2, column=0, sticky="ew", pady=(10, 5)
         )
 
-        self.volume_var = tk.DoubleVar(value=1.0)
-        vol_slider = ttk.Scale(
-            self.player_frame,
-            from_=0.0,
-            to=1.0,
-            orient="horizontal",
-            variable=self.volume_var,
-            command=self.on_volume_change,  # live update on drag
-            length=500,                     # keep it wide
+        render_frame = ttk.Frame(self.player_frame)
+        render_frame.grid(row=3, column=0, sticky="ew")
+        render_frame.columnconfigure(0, weight=1)
+        render_frame.columnconfigure(1, weight=0)
+
+        self.render_progress_var = tk.DoubleVar(value=0.0)
+        self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
+        self.render_progress_bar = ttk.Progressbar(
+            render_frame,
+            variable=self.render_progress_var,
+            maximum=100,
+            mode="determinate",
         )
-        vol_slider.grid(row=3, column=1, columnspan=5, sticky="ew", pady=(5, 0))
-
-
-        # playback speed (row 4) – snapping + wider slider
-        self.speed_var = tk.DoubleVar(value=1.0)
-        self.speed_label = ttk.Label(self.player_frame, text="1.00x")
-        self.speed_label.grid(row=4, column=0, pady=(5, 0))
-
-        speed_slider = ttk.Scale(
-            self.player_frame,
-            from_=0.25,
-            to=2.0,
-            orient="horizontal",
-            variable=self.speed_var,
-            command=self.on_speed_drag,   # update label while dragging
-            length=500,
+        self.render_progress_bar.grid(row=0, column=0, sticky="ew", pady=(5, 0))
+        self.render_progress_label = ttk.Label(
+            render_frame,
+            textvariable=self.render_progress_label_var,
+            # Fixed width prevents layout shifts when the status text changes.
+            width=28,
         )
-        speed_slider.grid(row=4, column=1, columnspan=5, sticky="ew", pady=(5, 0))
-        speed_slider.bind("<ButtonRelease-1>", self.on_speed_release)
-
-        # pitch (row 5) – semitones, -6..+6, 1.0 steps
-        self.pitch_var = tk.DoubleVar(value=0)
-        initial_pitch = 0
-        self.pitch_label = ttk.Label(
-            self.player_frame,
-            width=12,
-            text=self.format_pitch_label(initial_pitch)
-        )
-        self.pitch_label.grid(row=5, column=0, pady=(5, 0))
-
-        pitch_slider = ttk.Scale(
-            self.player_frame,
-            from_=-6.0,
-            to=6.0,
-            orient="horizontal",
-            variable=self.pitch_var,
-            command=self.on_pitch_drag,
-            length=500,
-        )
-        pitch_slider.grid(row=5, column=1, columnspan=5, sticky="ew", pady=(5, 0))
-        pitch_slider.bind("<ButtonRelease-1>", self.on_pitch_release)
+        self.render_progress_label.grid(row=0, column=1, pady=(5, 0), padx=(10, 0))
 
         self.update_key_table(self.pitch_var.get())
 
@@ -1480,41 +1588,6 @@ class YTDemucsApp:
         self.player.set_reverb_enabled(bool(self.reverb_enabled_var.get()))
         self.on_reverb_mix_change(str(self.reverb_mix_var.get()))
         self.update_reverb_controls_state()
-
-        # rendering progress (bottom of player area)
-        ttk.Separator(self.player_frame, orient="horizontal").grid(
-            row=6,
-            column=0,
-            columnspan=max(6, len(stem_names) + 1),
-            sticky="ew",
-            pady=(10, 5),
-        )
-        self.render_progress_var = tk.DoubleVar(value=0.0)
-        self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
-        self.render_progress_bar = ttk.Progressbar(
-            self.player_frame,
-            variable=self.render_progress_var,
-            maximum=100,
-            mode="determinate",
-        )
-        self.render_progress_bar.grid(
-            row=7,
-            column=0,
-            columnspan=7,
-            sticky="ew",
-            pady=(5, 0),
-        )
-        self.render_progress_label = ttk.Label(
-            self.player_frame,
-            textvariable=self.render_progress_label_var,
-            # Fixed width prevents layout shifts when the status text changes.
-            width=28,
-        )
-        self.render_progress_label.grid(
-            row=7,
-            column=5,
-            pady=(5, 0),
-        )
 
         # initial waveform
         self.update_waveform_from_selection()
@@ -2126,14 +2199,17 @@ class YTDemucsApp:
                 self.time_label.config(text=f"{elapsed_str} / {total_str}")
 
             level = self.player.get_output_level()
+            if level <= 1e-6:
+                meter_value = 0.0
+                db_text = "-∞ dB"
+            else:
+                db = max(-60.0, 20 * math.log10(level))
+                meter_value = db + 60.0
+                db_text = f"{db:.1f} dB"
+
             if self.audio_meter is not None:
-                self.audio_meter.configure(value=max(0.0, min(level, 1.0)))
+                self.audio_meter.configure(value=meter_value)
             if self.audio_meter_label is not None:
-                if level <= 1e-6:
-                    db_text = "-∞ dB"
-                else:
-                    db = max(-60.0, 20 * math.log10(level))
-                    db_text = f"{db:.1f} dB"
                 self.audio_meter_label.config(text=db_text)
 
             if (
