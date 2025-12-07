@@ -135,30 +135,35 @@ class YTDemucsApp:
         meters_stack.columnconfigure(0, weight=1)
         meters_stack.columnconfigure(1, weight=1)
         meters_stack.rowconfigure(0, weight=1)
-        meters_stack.rowconfigure(1, weight=0)
+
+        meter_column = ttk.Frame(meters_stack)
+        meter_column.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        meter_column.columnconfigure(0, weight=1)
+        meter_column.rowconfigure(0, weight=1)
+        meter_column.rowconfigure(3, weight=1)
 
         self.audio_meter = ttk.Progressbar(
-            meters_stack,
+            meter_column,
             mode="determinate",
             maximum=60.0,  # dBFS scale, updated dynamically
             length=220,
             orient="vertical",
             style="red.Horizontal.TProgressbar",
         )
-        self.audio_meter.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.audio_meter.grid(row=1, column=0)
 
         self.audio_meter_label = ttk.Label(
-            meters_stack,
+            meter_column,
             text="-∞ dB",
             style="DisabledPlayback.TLabel",
         )
-        self.audio_meter_label.grid(row=1, column=0, pady=(6, 0))
+        self.audio_meter_label.grid(row=2, column=0, pady=(6, 0))
 
         self.volume_container = ttk.Frame(meters_stack)
-        self.volume_container.grid(row=0, column=1, sticky="nsew", rowspan=2)
-        self.volume_container.rowconfigure(0, weight=1)
-        self.volume_container.rowconfigure(1, weight=0)
+        self.volume_container.grid(row=0, column=1, sticky="nsew")
         self.volume_container.columnconfigure(0, weight=1)
+        self.volume_container.rowconfigure(0, weight=1)
+        self.volume_container.rowconfigure(3, weight=1)
 
         right_column = ttk.Frame(top_row)
         right_column.grid(row=0, column=1, sticky="nsew")
@@ -183,7 +188,8 @@ class YTDemucsApp:
 
         reverb_frame = ttk.Frame(sliders_column)
         reverb_frame.grid(row=0, column=0, sticky="nsew")
-        reverb_frame.rowconfigure(1, weight=1)
+        reverb_frame.rowconfigure(0, weight=1)
+        reverb_frame.rowconfigure(4, weight=1)
         reverb_frame.columnconfigure(0, weight=1)
 
         self.reverb_checkbox = ttk.Checkbutton(
@@ -192,7 +198,7 @@ class YTDemucsApp:
             variable=self.reverb_enabled_var,
             command=self.on_reverb_toggle,
         )
-        self.reverb_checkbox.grid(row=0, column=0, sticky="w")
+        self.reverb_checkbox.grid(row=1, column=0, pady=(0, 4))
 
         self.reverb_mix_slider = ttk.Scale(
             reverb_frame,
@@ -203,18 +209,19 @@ class YTDemucsApp:
             command=self.on_reverb_mix_change,
             length=200,
         )
-        self.reverb_mix_slider.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
+        self.reverb_mix_slider.grid(row=2, column=0, pady=(0, 4))
 
         self.reverb_mix_label = ttk.Label(reverb_frame, text="45% wet")
-        self.reverb_mix_label.grid(row=2, column=0, pady=(0, 6))
+        self.reverb_mix_label.grid(row=3, column=0)
 
         gain_frame = ttk.Frame(sliders_column)
         gain_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
-        gain_frame.rowconfigure(1, weight=1)
+        gain_frame.rowconfigure(0, weight=1)
+        gain_frame.rowconfigure(4, weight=1)
         gain_frame.columnconfigure(0, weight=1)
 
         self.gain_title_label = ttk.Label(gain_frame, text="Gain")
-        self.gain_title_label.grid(row=0, column=0, sticky="w")
+        self.gain_title_label.grid(row=1, column=0, pady=(0, 4))
 
         self.gain_var = tk.DoubleVar(value=0.0)
         self.gain_label = ttk.Label(
@@ -230,9 +237,9 @@ class YTDemucsApp:
             command=self.on_gain_change,
             length=200,
         )
-        self.gain_slider.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
+        self.gain_slider.grid(row=2, column=0, pady=(0, 4))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
-        self.gain_label.grid(row=2, column=0, sticky="w")
+        self.gain_label.grid(row=3, column=0)
         self.playback_label_widgets.append(self.gain_title_label)
 
         ttk.Separator(right_top, orient="vertical").grid(
@@ -519,7 +526,7 @@ class YTDemucsApp:
         # periodic UI updates
         self.root.after(100, self.update_playback_ui)
 
-        self.set_playback_controls_state(False)
+        self.build_disabled_playback_ui()
         YTDemucsApp.instances.append(self)
 
         self.update_key_table()
@@ -1193,10 +1200,7 @@ class YTDemucsApp:
         self.update_player_frame_visibility()
 
     def update_player_frame_visibility(self):
-        should_show_player = (
-            self.has_active_session()
-            and self.notebook.select() == str(self.playback_tab)
-        )
+        should_show_player = self.notebook.select() == str(self.playback_tab)
 
         if should_show_player:
             if not self.player_frame.winfo_manager():
@@ -1335,19 +1339,32 @@ class YTDemucsApp:
 
     # ---------- player UI ----------
 
-    def setup_player(
-        self,
-        stems_dir: str | None,
-        preloaded: tuple[list[str], dict[str, list[float]]] | None = None,
-    ):
-        if not self.player.audio_ok:
-            self.append_log("Audio playback not available (sounddevice init failed).")
-            return
-        if not self.full_mix_path:
-            self.append_log("No full mix path available.")
-            return
+    def reset_playback_widget_tracking(self):
+        self.playback_control_widgets = [
+            self.audio_meter,
+            self.gain_slider,
+            self.reverb_checkbox,
+            self.reverb_mix_slider,
+        ]
+        self.playback_label_widgets = [
+            self.audio_meter_label,
+            self.gain_title_label,
+            self.gain_label,
+            self.thumbnail_label,
+            self.reverb_mix_label,
+        ]
+        self.playback_label_widgets.extend(self.key_table_headers)
+        self.playback_label_widgets.extend(self.key_table_value_labels.values())
 
-        # clear UI
+    def build_playback_layout(
+        self,
+        stem_names: list[str],
+        *,
+        all_selected: bool,
+        initial_speed: float = 1.0,
+        initial_pitch: float = 0.0,
+        initial_volume: float = 1.0,
+    ):
         for w in self.player_frame.winfo_children():
             w.destroy()
         for frame in (
@@ -1377,52 +1394,19 @@ class YTDemucsApp:
         self.render_progress_label_var = None
         self.render_progress_bar = None
         self.render_progress_label = None
-        self.playback_control_widgets = [
-            self.audio_meter,
-            self.gain_slider,
-            self.reverb_checkbox,
-            self.reverb_mix_slider,
-        ]
-        self.playback_label_widgets = [
-            self.audio_meter_label,
-            self.gain_title_label,
-            self.gain_label,
-            self.thumbnail_label,
-            self.reverb_mix_label,
-        ]
-        self.playback_label_widgets.extend(self.key_table_headers)
-        self.playback_label_widgets.extend(self.key_table_value_labels.values())
         self.waveform_points = []
         self.waveform_duration = 0.0
         self.loop_start_line_id = None
         self.loop_end_line_id = None
         self.stem_vars.clear()
 
-        # load audio via player
-        try:
-            if preloaded is None:
-                if stems_dir is None:
-                    # Skip separation mode: full mix only
-                    stem_names, envelopes = self.player.load_mix_only(self.full_mix_path)
-                else:
-                    stem_names, envelopes = self.player.load_audio(
-                        stems_dir, self.full_mix_path
-                    )
-            else:
-                stem_names, envelopes = preloaded
-        except Exception as e:
-            self.append_log(f"Failed to load audio: {e}")
-            return
-
-        self.waveform_duration = self.player.get_duration()
-
-        self.set_playback_controls_state(True)
+        self.reset_playback_widget_tracking()
 
         # master volume (left column, vertical)
-        self.volume_label = ttk.Label(self.volume_container, text="100%")
-        self.volume_label.grid(row=1, column=0, pady=(6, 0))
+        self.volume_label = ttk.Label(self.volume_container, text=f"{int(initial_volume*100)}%")
+        self.volume_label.grid(row=2, column=0, pady=(6, 0))
 
-        self.volume_var = tk.DoubleVar(value=1.0)
+        self.volume_var = tk.DoubleVar(value=initial_volume)
         self.volume_slider = ttk.Scale(
             self.volume_container,
             from_=0.0,
@@ -1432,13 +1416,13 @@ class YTDemucsApp:
             command=self.on_volume_change,
             length=220,
         )
-        self.volume_slider.grid(row=0, column=0, sticky="nsew")
+        self.volume_slider.grid(row=1, column=0)
         self.playback_control_widgets.append(self.volume_slider)
         self.playback_label_widgets.append(self.volume_label)
 
         # stem checkboxes (only if we actually have stems)
         for idx, stem_name in enumerate(stem_names):
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=all_selected)
             cb = ttk.Checkbutton(
                 self.stems_frame,
                 text=stem_name,
@@ -1449,7 +1433,7 @@ class YTDemucsApp:
             self.stem_vars[stem_name] = var
 
         # "All" checkbox (full mix)
-        self.all_var = tk.BooleanVar(value=(stems_dir is None))
+        self.all_var = tk.BooleanVar(value=all_selected or not stem_names)
         cb_all = ttk.Checkbutton(
             self.stems_frame,
             text="All",
@@ -1458,13 +1442,9 @@ class YTDemucsApp:
         )
         cb_all.grid(row=0, column=0, padx=(0, 10))
 
-        # If no stems at all (skip separation), force All mode in player
-        if not stem_names:
-            self.player.set_play_all(True)
-
         # playback speed (row in right column)
-        self.speed_var = tk.DoubleVar(value=1.0)
-        self.speed_label = ttk.Label(self.speed_frame, text="1.00x")
+        self.speed_var = tk.DoubleVar(value=initial_speed)
+        self.speed_label = ttk.Label(self.speed_frame, text=f"{initial_speed:.2f}x")
         self.speed_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         speed_slider = ttk.Scale(
@@ -1482,8 +1462,7 @@ class YTDemucsApp:
         self.playback_label_widgets.append(self.speed_label)
 
         # pitch (row in right column) – semitones, -6..+6, 1.0 steps
-        self.pitch_var = tk.DoubleVar(value=0)
-        initial_pitch = 0
+        self.pitch_var = tk.DoubleVar(value=initial_pitch)
         self.pitch_label = ttk.Label(
             self.pitch_frame,
             width=12,
@@ -1587,6 +1566,49 @@ class YTDemucsApp:
 
         self.update_key_table(self.pitch_var.get())
 
+    def build_disabled_playback_ui(self):
+        self.build_playback_layout([], all_selected=False)
+        self.set_playback_controls_state(False)
+
+    def setup_player(
+        self,
+        stems_dir: str | None,
+        preloaded: tuple[list[str], dict[str, list[float]]] | None = None,
+    ):
+        if not self.player.audio_ok:
+            self.append_log("Audio playback not available (sounddevice init failed).")
+            return
+        if not self.full_mix_path:
+            self.append_log("No full mix path available.")
+            return
+
+        try:
+            if preloaded is None:
+                if stems_dir is None:
+                    # Skip separation mode: full mix only
+                    stem_names, _envelopes = self.player.load_mix_only(self.full_mix_path)
+                else:
+                    stem_names, _envelopes = self.player.load_audio(
+                        stems_dir, self.full_mix_path
+                    )
+            else:
+                stem_names, _envelopes = preloaded
+        except Exception as e:
+            self.append_log(f"Failed to load audio: {e}")
+            return
+
+        self.build_playback_layout(stem_names, all_selected=stems_dir is None)
+        self.waveform_duration = self.player.get_duration()
+
+        self.set_playback_controls_state(True)
+
+        # If no stems at all (skip separation), force All mode in player
+        if not stem_names:
+            self.player.set_play_all(True)
+
+        self.update_waveform_from_selection()
+        self.draw_waveform()
+
         if self.reverb_enabled_var is not None:
             self.reverb_enabled_var.set(False)
         if self.reverb_mix_var is not None:
@@ -1594,10 +1616,6 @@ class YTDemucsApp:
         self.player.set_reverb_enabled(bool(self.reverb_enabled_var.get()))
         self.on_reverb_mix_change(str(self.reverb_mix_var.get()))
         self.update_reverb_controls_state()
-
-        # initial waveform
-        self.update_waveform_from_selection()
-        self.draw_waveform()
 
         self.update_player_frame_visibility()
 
@@ -1875,7 +1893,7 @@ class YTDemucsApp:
         self.audio_meter.configure(value=0.0)
         self.audio_meter_label.config(text="-∞ dB")
         self.player.set_gain_db(0.0)
-        self.set_playback_controls_state(False)
+        self.build_disabled_playback_ui()
         self.update_key_table()
         self.update_save_button_state()
         self.update_player_frame_visibility()
