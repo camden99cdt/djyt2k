@@ -398,6 +398,26 @@ class StemAudioPlayer:
             return 0.0
         return self.play_index / float(self.session.sample_rate)
 
+    def apply_pending_tempo_pitch(self) -> bool:
+        """
+        If a rendered tempo/pitch change is ready while playback is paused or
+        stopped, swap it in immediately so duration/position reflect the new
+        speed.
+        """
+        if self.session.sample_rate is None:
+            return False
+
+        if self.is_playing and not self.is_paused:
+            return False
+
+        pos_seconds = self.play_index / float(self.session.sample_rate)
+        new_index = self.session.maybe_swap_pending(pos_seconds)
+        if new_index is None:
+            return False
+
+        self.play_index = new_index
+        return True
+
     def get_duration(self) -> float:
         return self.session.get_duration()
 
