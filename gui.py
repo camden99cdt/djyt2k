@@ -47,6 +47,10 @@ class YTDemucsApp:
         self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
 
+        # Widgets toggled by playback enable/disable state
+        self.playback_control_widgets: list[tk.Widget] = []
+        self.playback_label_widgets: list[ttk.Label] = []
+
         # ---------- layout ----------
         container = ttk.Frame(root)
         container.grid(row=0, column=0, sticky="nsew")
@@ -209,8 +213,8 @@ class YTDemucsApp:
         gain_frame.rowconfigure(1, weight=1)
         gain_frame.columnconfigure(0, weight=1)
 
-        gain_title_label = ttk.Label(gain_frame, text="Gain")
-        gain_title_label.grid(row=0, column=0, sticky="w")
+        self.gain_title_label = ttk.Label(gain_frame, text="Gain")
+        self.gain_title_label.grid(row=0, column=0, sticky="w")
 
         self.gain_var = tk.DoubleVar(value=0.0)
         self.gain_label = ttk.Label(
@@ -229,7 +233,7 @@ class YTDemucsApp:
         self.gain_slider.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
         self.gain_label.grid(row=2, column=0, sticky="w")
-        self.playback_label_widgets.append(gain_title_label)
+        self.playback_label_widgets.append(self.gain_title_label)
 
         ttk.Separator(right_top, orient="vertical").grid(
             row=0, column=1, sticky="ns", padx=10
@@ -262,6 +266,21 @@ class YTDemucsApp:
             )
             value_lbl.grid(row=idx, column=1, sticky="e", pady=(0, 4), padx=(10, 0))
             self.key_table_value_labels[value_key] = value_lbl
+
+        self.playback_control_widgets.extend(
+            [self.audio_meter, self.gain_slider, self.reverb_checkbox, self.reverb_mix_slider]
+        )
+        self.playback_label_widgets.extend(
+            [
+                self.audio_meter_label,
+                self.gain_title_label,
+                self.gain_label,
+                self.thumbnail_label,
+                self.reverb_mix_label,
+            ]
+        )
+        self.playback_label_widgets.extend(self.key_table_headers)
+        self.playback_label_widgets.extend(self.key_table_value_labels.values())
 
         right_bottom = ttk.Frame(right_column)
         right_bottom.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
@@ -462,20 +481,6 @@ class YTDemucsApp:
         self.render_progress_label: ttk.Label | None = None
         self.loop_start_line_id: int | None = None
         self.loop_end_line_id: int | None = None
-        self.playback_control_widgets: list[tk.Widget] = [
-            self.audio_meter,
-            self.gain_slider,
-            self.reverb_checkbox,
-            self.reverb_mix_slider,
-        ]
-        self.playback_label_widgets: list[ttk.Label] = [
-            self.audio_meter_label,
-            self.gain_label,
-            self.thumbnail_label,
-            self.reverb_mix_label,
-        ]
-        self.playback_label_widgets.extend(self.key_table_headers)
-        self.playback_label_widgets.extend(self.key_table_value_labels.values())
         self.playback_enabled = False
 
         self.waveform_points: list[float] = []
@@ -1380,6 +1385,7 @@ class YTDemucsApp:
         ]
         self.playback_label_widgets = [
             self.audio_meter_label,
+            self.gain_title_label,
             self.gain_label,
             self.thumbnail_label,
             self.reverb_mix_label,
