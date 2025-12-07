@@ -49,6 +49,20 @@ class YTDemucsApp:
         self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
         self.setup_meter_styles()
+        self.render_label_width_chars = 32
+        self.style.configure(
+            "RenderProgress.TLabel",
+            anchor="center",
+            justify="center",
+        )
+        self.style.configure(
+            "RenderCancel.TLabel",
+            background="#c0392b",
+            foreground="#ffffff",
+            font=("TkDefaultFont", 10, "bold underline"),
+            anchor="center",
+            justify="center",
+        )
 
         # Widgets toggled by playback enable/disable state
         self.playback_control_widgets: list[tk.Widget] = []
@@ -483,6 +497,18 @@ class YTDemucsApp:
         self.render_progress_label_var: tk.StringVar | None = None
         self.render_progress_label: ttk.Label | None = None
         self.render_total_tasks: int | None = None
+        self.render_revert_state: dict | None = None
+        self.render_tasks_running = False
+        self.render_hovering_cancel = False
+        self.render_last_label_text = "Rendering: Ready"
+        self.last_requested_state = {
+            "speed": 1.0,
+            "pitch": 0.0,
+            "all": True,
+            "stems": set(),
+        }
+        self.applied_state = dict(self.last_requested_state)
+        self.suppress_render_requests = False
         self.loop_start_line_id: int | None = None
         self.loop_end_line_id: int | None = None
         self.playback_enabled = False
@@ -1467,12 +1493,17 @@ class YTDemucsApp:
         self.render_progress_label = ttk.Label(
             self.stems_frame,
             textvariable=self.render_progress_label_var,
-            anchor="e",
-            justify="right",
+            anchor="center",
+            justify="center",
+            style="RenderProgress.TLabel",
+            width=self.render_label_width_chars,
         )
         self.render_progress_label.grid(
             row=0, column=render_label_column, sticky="e", padx=(10, 0)
         )
+        self.render_progress_label.bind("<Enter>", self.on_render_label_enter)
+        self.render_progress_label.bind("<Leave>", self.on_render_label_leave)
+        self.render_progress_label.bind("<Button-1>", self.on_render_label_click)
 
         # If no stems at all (skip separation), force All mode in player
         if not stem_names:
@@ -1590,6 +1621,7 @@ class YTDemucsApp:
         self.draw_waveform()
 
         self.update_player_frame_visibility()
+        self.reset_render_tracking_from_ui()
 
     # ---------- waveform logic ----------
 
@@ -1602,17 +1634,26 @@ class YTDemucsApp:
         - If "All" is checked -> play full mix, waveform = full mix envelope
         - Else -> mix selected stems
         """
+        suppress = self.suppress_render_requests
         if self.all_var is not None and self.all_var.get():
-            self.player.set_play_all(True)
-            active = set()
-            self.player.set_active_stems(active)
+            if not suppress:
+                self.player.set_play_all(True)
+                active = set()
+                self.player.set_active_stems(active)
+            else:
+                self.player.session.play_all = True
+                self.player.session.active_stems = set()
             self.waveform_points = self.player.get_mix_envelope()
         else:
             active = {
                 name for name, var in self.stem_vars.items() if var.get()
             }
-            self.player.set_play_all(False)
-            self.player.set_active_stems(active)
+            if not suppress:
+                self.player.set_play_all(False)
+                self.player.set_active_stems(active)
+            else:
+                self.player.session.play_all = False
+                self.player.session.active_stems = set(active)
             self.waveform_points = self.player.mix_envelopes(active)
 
     def draw_waveform(self):
@@ -1846,6 +1887,17 @@ class YTDemucsApp:
         self.render_progress_label_var = None
         self.render_progress_label = None
         self.render_total_tasks = None
+        self.render_revert_state = None
+        self.render_tasks_running = False
+        self.render_hovering_cancel = False
+        self.render_last_label_text = "Rendering: Ready"
+        self.last_requested_state = {
+            "speed": 1.0,
+            "pitch": 0.0,
+            "all": True,
+            "stems": set(),
+        }
+        self.applied_state = dict(self.last_requested_state)
         self.waveform_points = []
         self.loop_start_line_id = None
         self.loop_end_line_id = None
@@ -1876,6 +1928,7 @@ class YTDemucsApp:
         Reset speed to 1x, pitch to +0.0 st, volume to 100%.
         Update both sliders/labels and underlying audio.
         """
+        self.cancel_render_tasks()
         self.player.set_loop_enabled(False)
         self.player.reset_loop_points()
         self.update_loop_button()
@@ -1920,6 +1973,7 @@ class YTDemucsApp:
         self.waveform_duration = self.player.get_duration()
         self.update_waveform_from_selection()
         self.draw_waveform()
+        self.reset_render_tracking_from_ui()
 
     def on_clear_app(self):
         """
@@ -1984,11 +2038,28 @@ class YTDemucsApp:
         v = self.snap_speed(raw_v)
         self.speed_var.set(v)
 
+        if self.suppress_render_requests:
+            if self.speed_label is not None:
+                self.speed_label.config(text=f"{v:.2f}x")
+            self.last_requested_state["speed"] = v
+            return
+
+        if (
+            self.render_tasks_running
+            and self.render_revert_state
+            and abs(v - self.render_revert_state.get("speed", v)) < 1e-6
+        ):
+            self.cancel_render_tasks()
+            return
+
+        self.prepare_render_request()
         # tell the player to request the new tempo
         self.player.set_tempo_rate(v)
 
         if self.speed_label is not None:
             self.speed_label.config(text=f"{v:.2f}x")
+
+        self.last_requested_state["speed"] = v
 
         # optional: redraw waveform (time axis effectively changes)
         self.draw_waveform()
@@ -2020,12 +2091,29 @@ class YTDemucsApp:
             return
         semitones = self.snap_pitch(float(self.pitch_var.get()))
         self.pitch_var.set(semitones)
+        if self.suppress_render_requests:
+            if self.pitch_label is not None:
+                self.pitch_label.config(text=self.format_pitch_label(semitones))
+            self.update_key_table(semitones)
+            self.last_requested_state["pitch"] = semitones
+            return
+
+        if (
+            self.render_tasks_running
+            and self.render_revert_state
+            and abs(semitones - self.render_revert_state.get("pitch", semitones)) < 1e-6
+        ):
+            self.cancel_render_tasks()
+            return
+
+        self.prepare_render_request()
         self.player.set_pitch_semitones(semitones)
 
         if self.pitch_label is not None:
             self.pitch_label.config(text=self.format_pitch_label(semitones))
 
         self.update_key_table(semitones)
+        self.last_requested_state["pitch"] = semitones
 
         self.waveform_duration = self.player.get_duration()
         self.update_waveform_from_selection()
@@ -2116,8 +2204,11 @@ class YTDemucsApp:
     def on_stem_toggle(self):
         if self.all_var is not None:
             self.all_var.set(False)
+        if not self.suppress_render_requests:
+            self.prepare_render_request()
         self.update_waveform_from_selection()
         self.draw_waveform()
+        self.last_requested_state = self.capture_playback_state()
 
     def on_all_toggle(self):
         if self.all_var is None:
@@ -2125,8 +2216,11 @@ class YTDemucsApp:
         if self.all_var.get():
             for var in self.stem_vars.values():
                 var.set(False)
+        if not self.suppress_render_requests:
+            self.prepare_render_request()
         self.update_waveform_from_selection()
         self.draw_waveform()
+        self.last_requested_state = self.capture_playback_state()
 
     def on_volume_change(self, value: str):
         """
@@ -2156,6 +2250,114 @@ class YTDemucsApp:
         if self.volume_var is not None:
             self.volume_var.set(volume)
         self.on_volume_change(str(volume))
+
+
+    # ---------- render/cancel state helpers ----------
+
+    def capture_playback_state(self) -> dict:
+        stems: set[str] = set()
+        if self.stem_vars:
+            stems = {name for name, var in self.stem_vars.items() if var.get()}
+        return {
+            "speed": float(self.speed_var.get()) if self.speed_var is not None else 1.0,
+            "pitch": float(self.pitch_var.get()) if self.pitch_var is not None else 0.0,
+            "all": bool(self.all_var.get()) if self.all_var is not None else True,
+            "stems": stems,
+        }
+
+    def reset_render_tracking_from_ui(self):
+        state = self.capture_playback_state()
+        self.applied_state = dict(state)
+        self.last_requested_state = dict(state)
+        self.render_revert_state = None
+        self.render_tasks_running = False
+        self.render_hovering_cancel = False
+        if self.render_progress_label_var is not None:
+            self.render_last_label_text = self.render_progress_label_var.get()
+        else:
+            self.render_last_label_text = "Rendering: Ready"
+
+    def prepare_render_request(self):
+        self.render_revert_state = dict(self.last_requested_state)
+        self.render_tasks_running = True
+
+    def apply_ui_state(self, state: dict):
+        if not state:
+            return
+        self.suppress_render_requests = True
+        try:
+            target_speed = state.get("speed", 1.0)
+            target_pitch = state.get("pitch", 0.0)
+            target_all = state.get("all", True)
+            target_stems = set(state.get("stems", set()))
+
+            if self.speed_var is not None:
+                self.speed_var.set(target_speed)
+            if self.speed_label is not None:
+                self.speed_label.config(text=f"{target_speed:.2f}x")
+
+            if self.pitch_var is not None:
+                self.pitch_var.set(target_pitch)
+            if self.pitch_label is not None:
+                self.pitch_label.config(text=self.format_pitch_label(target_pitch))
+            self.update_key_table(target_pitch)
+
+            if self.all_var is not None:
+                self.all_var.set(target_all)
+            if not target_all:
+                for name, var in self.stem_vars.items():
+                    var.set(name in target_stems)
+            else:
+                for var in self.stem_vars.values():
+                    var.set(False)
+
+            self.update_waveform_from_selection()
+            self.draw_waveform()
+        finally:
+            self.suppress_render_requests = False
+
+    def cancel_render_tasks(self, force_state: dict | None = None):
+        self.player.cancel_pending_render()
+        target_state = force_state if force_state is not None else self.render_revert_state
+        self.render_tasks_running = False
+        self.render_total_tasks = None
+        self.render_hovering_cancel = False
+        if self.render_progress_label is not None:
+            self.render_progress_label.configure(style="RenderProgress.TLabel")
+        if self.render_progress_label_var is not None:
+            self.render_progress_label_var.set("Rendering: Ready")
+        self.render_last_label_text = "Rendering: Ready"
+
+        if target_state:
+            self.apply_ui_state(target_state)
+            self.applied_state = dict(target_state)
+            self.last_requested_state = dict(target_state)
+        self.render_revert_state = None
+
+    def on_render_label_enter(self, _event=None):
+        if not self.render_tasks_running or self.render_progress_label_var is None:
+            return
+        self.render_hovering_cancel = True
+        if self.render_progress_label is not None:
+            self.render_progress_label.configure(
+                style="RenderCancel.TLabel", width=self.render_label_width_chars
+            )
+        self.render_progress_label_var.set("CANCEL")
+
+    def on_render_label_leave(self, _event=None):
+        if not self.render_hovering_cancel:
+            return
+        self.render_hovering_cancel = False
+        if self.render_progress_label is not None:
+            self.render_progress_label.configure(
+                style="RenderProgress.TLabel", width=self.render_label_width_chars
+            )
+        if self.render_progress_label_var is not None:
+            self.render_progress_label_var.set(self.render_last_label_text)
+
+    def on_render_label_click(self, _event=None):
+        if self.render_tasks_running:
+            self.cancel_render_tasks()
 
 
     # ---------- render progress ----------
@@ -2191,15 +2393,29 @@ class YTDemucsApp:
             text = label.strip() if label else "Ready"
 
             if label:
+                self.render_tasks_running = True
                 if total:
-                    self.render_progress_label_var.set(
-                        f"({current}/{total}) Rendering: {text}"
-                    )
+                    display_text = f"({current}/{total}) Rendering: {text}"
                 else:
-                    self.render_progress_label_var.set(f"Rendering: {text}")
+                    display_text = f"Rendering: {text}"
+                self.render_last_label_text = display_text
+                if self.render_progress_label_var is not None and not self.render_hovering_cancel:
+                    self.render_progress_label_var.set(display_text)
             else:
                 self.render_total_tasks = None
-                self.render_progress_label_var.set("Rendering: Ready")
+                self.render_tasks_running = False
+                self.render_last_label_text = "Rendering: Ready"
+                self.render_revert_state = None
+                self.applied_state = self.capture_playback_state()
+                self.last_requested_state = dict(self.applied_state)
+                if self.render_hovering_cancel:
+                    self.render_hovering_cancel = False
+                    if self.render_progress_label is not None:
+                        self.render_progress_label.configure(
+                            style="RenderProgress.TLabel", width=self.render_label_width_chars
+                        )
+                if self.render_progress_label_var is not None:
+                    self.render_progress_label_var.set("Rendering: Ready")
 
         self.root.after(0, _update)
 
