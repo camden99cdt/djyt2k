@@ -2158,10 +2158,18 @@ class YTDemucsApp:
 
     # ---------- render progress ----------
 
-    def on_render_progress(self, progress: float, label: str):
+    def on_render_progress(
+        self, progress: float, label: str, total_tasks: int | None = None
+    ):
         def _update():
             if self.render_progress_label_var is None:
                 return
+
+            if total_tasks is not None:
+                try:
+                    self.render_total_tasks = max(1, int(total_tasks))
+                except (TypeError, ValueError):
+                    self.render_total_tasks = self.render_total_tasks
 
             try:
                 pct = max(0.0, min(float(progress), 1.0))
@@ -2173,7 +2181,7 @@ class YTDemucsApp:
                     estimated_total = round(1.0 / pct)
                     self.render_total_tasks = max(1, estimated_total)
                 total = self.render_total_tasks or 1
-                current = min(total, int(round(pct * total)) + 1)
+                current = max(1, min(total, int(math.floor(pct * total)) + 1))
             else:
                 total = self.render_total_tasks
                 current = 1 if total else None

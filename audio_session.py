@@ -423,6 +423,7 @@ class AudioSession:
                         progress_callback(
                             completed / float(max(total_items, 1)),
                             f"{name}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
+                            total_items,
                         )
                     new_stems[name] = self._apply_tempo_pitch(
                         data=orig,
@@ -440,6 +441,7 @@ class AudioSession:
                         progress_callback(
                             completed / float(max(total_items, 1)),
                             f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
+                            total_items,
                         )
                     new_mix = self._apply_tempo_pitch(
                         data=self.original_mix,
@@ -475,7 +477,7 @@ class AudioSession:
                     log_callback("New tempo/pitch configuration ready.")
 
                 if progress_callback:
-                    progress_callback(1.0, "")
+                    progress_callback(1.0, "", total_items)
 
             except Exception as e:
                 if log_callback:
