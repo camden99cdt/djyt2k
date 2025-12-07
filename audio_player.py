@@ -185,6 +185,9 @@ class StemAudioPlayer:
         """Optional UI hook to receive render progress updates."""
         self.render_progress_callback = callback
 
+    def cancel_pending_render(self):
+        self.session.cancel_pending_render()
+
 
     def set_reverb_enabled(self, enabled: bool):
         self.session.set_reverb_enabled(enabled)

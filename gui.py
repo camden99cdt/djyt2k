@@ -50,6 +50,16 @@ class YTDemucsApp:
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
         self.setup_meter_styles()
 
+        self.applied_speed = 1.0
+        self.applied_pitch = 0.0
+        self.applied_stems: set[str] = set()
+        self.applied_all = True
+        self.render_revert_state: dict | None = None
+        self.render_hovering_cancel = False
+        self.render_active = False
+        self.last_render_progress_text = "Rendering: Ready"
+        self.suppress_render_events = False
+
         # Widgets toggled by playback enable/disable state
         self.playback_control_widgets: list[tk.Widget] = []
         self.playback_label_widgets: list[ttk.Label] = []
@@ -1441,7 +1451,7 @@ class YTDemucsApp:
 
         # stem checkboxes (only if we actually have stems)
         for idx, stem_name in enumerate(stem_names):
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=False)
             cb = ttk.Checkbutton(
                 self.stems_frame,
                 text=stem_name,
@@ -1452,7 +1462,7 @@ class YTDemucsApp:
             self.stem_vars[stem_name] = var
 
         # "All" checkbox (full mix)
-        self.all_var = tk.BooleanVar(value=(stems_dir is None))
+        self.all_var = tk.BooleanVar(value=True)
         cb_all = ttk.Checkbutton(
             self.stems_frame,
             text="All",
@@ -1464,15 +1474,22 @@ class YTDemucsApp:
         render_label_column = len(stem_names) + 1
         self.stems_frame.columnconfigure(render_label_column, weight=1)
         self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
-        self.render_progress_label = ttk.Label(
+        self.render_progress_label = tk.Label(
             self.stems_frame,
             textvariable=self.render_progress_label_var,
             anchor="e",
             justify="right",
+            width=32,
         )
         self.render_progress_label.grid(
             row=0, column=render_label_column, sticky="e", padx=(10, 0)
         )
+        self.render_default_font = tkfont.nametofont("TkDefaultFont")
+        self.render_default_bg = self.render_progress_label.cget("background")
+        self.render_default_fg = self.render_progress_label.cget("foreground")
+        self.render_progress_label.bind("<Enter>", self.on_render_label_enter)
+        self.render_progress_label.bind("<Leave>", self.on_render_label_leave)
+        self.render_progress_label.bind("<Button-1>", self.on_cancel_render_click)
 
         # If no stems at all (skip separation), force All mode in player
         if not stem_names:
@@ -1588,6 +1605,11 @@ class YTDemucsApp:
         # initial waveform
         self.update_waveform_from_selection()
         self.draw_waveform()
+
+        self.applied_all = True
+        self.applied_stems = set()
+        self.applied_speed = float(self.speed_var.get()) if self.speed_var is not None else 1.0
+        self.applied_pitch = float(self.pitch_var.get()) if self.pitch_var is not None else 0.0
 
         self.update_player_frame_visibility()
 
@@ -1984,6 +2006,10 @@ class YTDemucsApp:
         v = self.snap_speed(raw_v)
         self.speed_var.set(v)
 
+        if not self.suppress_render_events:
+            self.begin_render_state()
+            self.applied_speed = v
+
         # tell the player to request the new tempo
         self.player.set_tempo_rate(v)
 
@@ -2020,6 +2046,9 @@ class YTDemucsApp:
             return
         semitones = self.snap_pitch(float(self.pitch_var.get()))
         self.pitch_var.set(semitones)
+        if not self.suppress_render_events:
+            self.begin_render_state()
+            self.applied_pitch = semitones
         self.player.set_pitch_semitones(semitones)
 
         if self.pitch_label is not None:
@@ -2114,8 +2143,12 @@ class YTDemucsApp:
 
 
     def on_stem_toggle(self):
+        if not self.suppress_render_events:
+            self.begin_render_state()
         if self.all_var is not None:
             self.all_var.set(False)
+        self.applied_all = False
+        self.applied_stems = {name for name, var in self.stem_vars.items() if var.get()}
         self.update_waveform_from_selection()
         self.draw_waveform()
 
@@ -2123,8 +2156,12 @@ class YTDemucsApp:
         if self.all_var is None:
             return
         if self.all_var.get():
+            if not self.suppress_render_events:
+                self.begin_render_state()
+            self.applied_all = True
             for var in self.stem_vars.values():
                 var.set(False)
+            self.applied_stems = set()
         self.update_waveform_from_selection()
         self.draw_waveform()
 
@@ -2160,6 +2197,82 @@ class YTDemucsApp:
 
     # ---------- render progress ----------
 
+    def begin_render_state(self):
+        self.render_revert_state = {
+            "speed": self.applied_speed,
+            "pitch": self.applied_pitch,
+            "stems": set(self.applied_stems),
+            "all": self.applied_all,
+        }
+        self.render_active = True
+
+    def set_render_label_text(self, text: str):
+        self.last_render_progress_text = text
+        if not self.render_hovering_cancel and self.render_progress_label_var is not None:
+            self.render_progress_label_var.set(text)
+
+    def on_render_label_enter(self, event):
+        self.render_hovering_cancel = True
+        if not self.render_active or self.render_progress_label is None:
+            return
+        if self.render_progress_label_var is not None:
+            self.render_progress_label_var.set("CANCEL")
+        font_copy = self.render_default_font.copy()
+        font_copy.configure(weight="bold", underline=1)
+        self.render_progress_label.config(
+            background="#c62828",
+            foreground="white",
+            font=font_copy,
+            anchor="center",
+        )
+
+    def on_render_label_leave(self, event):
+        self.render_hovering_cancel = False
+        if self.render_progress_label is None:
+            return
+        self.render_progress_label.config(
+            background=self.render_default_bg,
+            foreground=self.render_default_fg,
+            font=self.render_default_font,
+            anchor="e",
+        )
+        if self.render_progress_label_var is not None:
+            self.render_progress_label_var.set(self.last_render_progress_text)
+
+    def on_cancel_render_click(self, event=None):
+        if not self.render_active or self.render_revert_state is None:
+            return
+        self.player.cancel_pending_render()
+        state = self.render_revert_state
+
+        self.suppress_render_events = True
+        if self.speed_var is not None:
+            self.speed_var.set(state.get("speed", 1.0))
+            self.on_speed_drag(str(state.get("speed", 1.0)))
+        if self.pitch_var is not None:
+            self.pitch_var.set(state.get("pitch", 0.0))
+            self.on_pitch_drag(str(state.get("pitch", 0.0)))
+
+        target_stems = state.get("stems", set())
+        if self.all_var is not None:
+            self.all_var.set(state.get("all", True))
+        for name, var in self.stem_vars.items():
+            var.set(name in target_stems)
+
+        self.applied_speed = state.get("speed", 1.0)
+        self.applied_pitch = state.get("pitch", 0.0)
+        self.applied_stems = set(target_stems)
+        self.applied_all = state.get("all", True)
+
+        self.update_waveform_from_selection()
+        self.draw_waveform()
+        self.suppress_render_events = False
+
+        self.render_active = False
+        self.render_revert_state = None
+        self.set_render_label_text("Rendering: Ready")
+        self.on_render_label_leave(None)
+
     def on_render_progress(
         self, progress: float, label: str, total_tasks: int | None = None
     ):
@@ -2192,14 +2305,14 @@ class YTDemucsApp:
 
             if label:
                 if total:
-                    self.render_progress_label_var.set(
-                        f"({current}/{total}) Rendering: {text}"
-                    )
+                    self.set_render_label_text(f"({current}/{total}) Rendering: {text}")
                 else:
-                    self.render_progress_label_var.set(f"Rendering: {text}")
+                    self.set_render_label_text(f"Rendering: {text}")
+                self.render_active = True
             else:
                 self.render_total_tasks = None
-                self.render_progress_label_var.set("Rendering: Ready")
+                self.render_active = False
+                self.set_render_label_text("Rendering: Ready")
 
         self.root.after(0, _update)
 

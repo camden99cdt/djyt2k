@@ -493,6 +493,15 @@ class AudioSession:
         thread = threading.Thread(target=worker, args=(generation,), daemon=True)
         thread.start()
 
+    def cancel_pending_render(self):
+        with self._pending_lock:
+            self._pending_generation += 1
+            self.pending_ready = False
+            self.pending_stem_data = {}
+            self.pending_mix_data = None
+            self.pending_missing_stems = set()
+            self.pending_total_samples = 0
+
     def set_active_stems(self, names: Set[str]):
         self.active_stems = set(names)
         self._sync_reverb_states()
