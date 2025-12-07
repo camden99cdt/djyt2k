@@ -35,7 +35,7 @@ class YTDemucsApp:
     instances: list["YTDemucsApp"] = []
     master_window: "MasterWindow | None" = None
     METER_FLOOR_DB = -50.0
-    METER_WARN_DB = -3.0
+    METER_WARN_DB = -16.0
 
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -141,7 +141,7 @@ class YTDemucsApp:
         meter_column = ttk.Frame(meters_stack)
         meter_column.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         meter_column.columnconfigure(0, weight=1)
-        meter_column.rowconfigure(0, weight=0)
+        meter_column.rowconfigure(0, weight=1)
 
         self.audio_meter = ttk.Progressbar(
             meter_column,
@@ -151,14 +151,15 @@ class YTDemucsApp:
             orient="vertical",
             style=self.meter_style_names["normal"],
         )
-        self.audio_meter.grid(row=0, column=0)
+        self.audio_meter.grid(row=0, column=0, sticky="ns")
 
         self.audio_meter_label = ttk.Label(
-            meters_stack,
+            meter_column,
+            width=10,
             text="-∞ dB",
             style="DisabledPlayback.TLabel",
         )
-        self.audio_meter_label.grid(row=1, column=0, pady=(6, 0))
+        self.audio_meter_label.grid(row=1, column=0, pady=(6, 0), sticky="n")
 
         self.volume_container = ttk.Frame(meters_stack)
         self.volume_container.grid(row=0, column=1, sticky="nsew", rowspan=2)
@@ -188,7 +189,7 @@ class YTDemucsApp:
         self.reverb_mix_var = tk.DoubleVar(value=0.45)
 
         reverb_frame = ttk.Frame(sliders_column)
-        reverb_frame.grid(row=0, column=0, sticky="nsew")
+        reverb_frame.grid(row=0, column=0, sticky="ew")
         reverb_frame.rowconfigure(1, weight=1)
         reverb_frame.columnconfigure(0, weight=1)
 
@@ -204,18 +205,17 @@ class YTDemucsApp:
             reverb_frame,
             from_=0.0,
             to=1.0,
-            orient="vertical",
             variable=self.reverb_mix_var,
             command=self.on_reverb_mix_change,
             length=200,
         )
-        self.reverb_mix_slider.grid(row=1, column=0, sticky="nsew", pady=(6, 6))
+        self.reverb_mix_slider.grid(row=1, column=0, sticky="ew", pady=(6, 6))
 
         self.reverb_mix_label = ttk.Label(reverb_frame, text="45% wet")
         self.reverb_mix_label.grid(row=2, column=0, pady=(0, 6))
 
         gain_frame = ttk.Frame(sliders_column)
-        gain_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        gain_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         gain_frame.rowconfigure(1, weight=1)
         gain_frame.columnconfigure(0, weight=1)
 
@@ -231,7 +231,6 @@ class YTDemucsApp:
             gain_frame,
             from_=-10.0,
             to=10.0,
-            orient="vertical",
             variable=self.gain_var,
             command=self.on_gain_change,
             length=200,
@@ -1425,7 +1424,7 @@ class YTDemucsApp:
         self.set_playback_controls_state(True)
 
         # master volume (left column, vertical)
-        self.volume_label = ttk.Label(self.volume_container, text="100%")
+        self.volume_label = ttk.Label(self.volume_container, width=10, text="100%")
         self.volume_label.grid(row=1, column=1, pady=(6, 0))
 
         self.volume_var = tk.DoubleVar(value=1.0)
@@ -2240,7 +2239,7 @@ class YTDemucsApp:
     def level_to_db(cls, level: float) -> float:
         if level <= 1e-9:
             return cls.METER_FLOOR_DB
-        return 20 * math.log10(max(level, 1e-9))
+        return 20 * math.log10(level ** 1.5)
 
     @classmethod
     def level_to_meter(cls, level: float) -> tuple[float, str]:
