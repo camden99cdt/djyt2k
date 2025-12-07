@@ -156,6 +156,8 @@ class YTDemucsApp:
         self.audio_meter_label = ttk.Label(
             meter_column,
             text="-∞ dB",
+            width=10,
+            anchor="center",
             style="DisabledPlayback.TLabel",
         )
         self.audio_meter_label.grid(row=1, column=0, pady=(6, 0))
@@ -1423,7 +1425,7 @@ class YTDemucsApp:
         self.set_playback_controls_state(True)
 
         # master volume (left column, vertical)
-        self.volume_label = ttk.Label(self.volume_container, text="100%")
+        self.volume_label = ttk.Label(self.volume_container, width=10, anchor="center", text="100%")
         self.volume_label.grid(row=1, column=1, pady=(6, 0))
 
         self.volume_var = tk.DoubleVar(value=1.0)
