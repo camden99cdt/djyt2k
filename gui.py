@@ -292,25 +292,21 @@ class YTDemucsApp:
         right_bottom = ttk.Frame(right_column)
         right_bottom.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         right_bottom.columnconfigure(0, weight=1)
-        right_bottom.rowconfigure(4, weight=0)
-
-        ttk.Separator(right_bottom, orient="horizontal").grid(
-            row=0, column=0, sticky="ew", pady=(0, 6)
-        )
+        right_bottom.rowconfigure(3, weight=0)
 
         self.stems_frame = ttk.Frame(right_bottom)
-        self.stems_frame.grid(row=1, column=0, sticky="w")
+        self.stems_frame.grid(row=0, column=0, sticky="ew")
 
         self.speed_frame = ttk.Frame(right_bottom)
-        self.speed_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.speed_frame.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         self.speed_frame.columnconfigure(1, weight=1)
 
         self.pitch_frame = ttk.Frame(right_bottom)
-        self.pitch_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        self.pitch_frame.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         self.pitch_frame.columnconfigure(1, weight=1)
 
         self.player_frame = ttk.Frame(right_bottom)
-        self.player_frame.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        self.player_frame.grid(row=3, column=0, sticky="ew", pady=(8, 0))
 
         self.sessions_tab.columnconfigure(0, weight=7, uniform="sessions")
         self.sessions_tab.columnconfigure(1, weight=3, uniform="sessions")
@@ -482,10 +478,9 @@ class YTDemucsApp:
         self.pitch_var: tk.DoubleVar | None = None
         self.pitch_label: ttk.Label | None = None
         self.all_var: tk.BooleanVar | None = None
-        self.render_progress_var: tk.DoubleVar | None = None
         self.render_progress_label_var: tk.StringVar | None = None
-        self.render_progress_bar: ttk.Progressbar | None = None
         self.render_progress_label: ttk.Label | None = None
+        self.render_total_tasks: int | None = None
         self.loop_start_line_id: int | None = None
         self.loop_end_line_id: int | None = None
         self.playback_enabled = False
@@ -1207,7 +1202,7 @@ class YTDemucsApp:
 
         if should_show_player:
             if not self.player_frame.winfo_manager():
-                self.player_frame.grid(row=4, column=0, sticky="nsew", pady=(10, 0))
+                self.player_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
         else:
             if self.player_frame.winfo_manager():
                 self.player_frame.grid_remove()
@@ -1380,10 +1375,9 @@ class YTDemucsApp:
         self.pitch_var = None
         self.pitch_label = None
         self.all_var = None
-        self.render_progress_var = None
         self.render_progress_label_var = None
-        self.render_progress_bar = None
         self.render_progress_label = None
+        self.render_total_tasks = None
         self.playback_control_widgets = [
             self.audio_meter,
             self.gain_slider,
@@ -1464,6 +1458,19 @@ class YTDemucsApp:
             command=self.on_all_toggle,
         )
         cb_all.grid(row=0, column=0, padx=(0, 10))
+
+        render_label_column = len(stem_names) + 1
+        self.stems_frame.columnconfigure(render_label_column, weight=1)
+        self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
+        self.render_progress_label = ttk.Label(
+            self.stems_frame,
+            textvariable=self.render_progress_label_var,
+            anchor="e",
+            justify="right",
+        )
+        self.render_progress_label.grid(
+            row=0, column=render_label_column, sticky="e", padx=(10, 0)
+        )
 
         # If no stems at all (skip separation), force All mode in player
         if not stem_names:
@@ -1565,32 +1572,6 @@ class YTDemucsApp:
         clear_button.grid(row=0, column=5, sticky="nsew")
 
         self.update_loop_button()
-
-        ttk.Separator(self.player_frame, orient="horizontal").grid(
-            row=2, column=0, sticky="ew", pady=(10, 5)
-        )
-
-        render_frame = ttk.Frame(self.player_frame)
-        render_frame.grid(row=3, column=0, sticky="ew")
-        render_frame.columnconfigure(0, weight=1)
-        render_frame.columnconfigure(1, weight=0)
-
-        self.render_progress_var = tk.DoubleVar(value=0.0)
-        self.render_progress_label_var = tk.StringVar(value="Rendering: Ready")
-        self.render_progress_bar = ttk.Progressbar(
-            render_frame,
-            variable=self.render_progress_var,
-            maximum=100,
-            mode="determinate",
-        )
-        self.render_progress_bar.grid(row=0, column=0, sticky="ew", pady=(5, 0))
-        self.render_progress_label = ttk.Label(
-            render_frame,
-            textvariable=self.render_progress_label_var,
-            # Fixed width prevents layout shifts when the status text changes.
-            width=28,
-        )
-        self.render_progress_label.grid(row=0, column=1, pady=(5, 0), padx=(10, 0))
 
         self.update_key_table(self.pitch_var.get())
 
@@ -1860,10 +1841,9 @@ class YTDemucsApp:
         self.pitch_var = None
         self.pitch_label = None
         self.all_var = None
-        self.render_progress_var = None
         self.render_progress_label_var = None
-        self.render_progress_bar = None
         self.render_progress_label = None
+        self.render_total_tasks = None
         self.waveform_points = []
         self.loop_start_line_id = None
         self.loop_end_line_id = None
@@ -2180,20 +2160,36 @@ class YTDemucsApp:
 
     def on_render_progress(self, progress: float, label: str):
         def _update():
-            if (
-                self.render_progress_var is None
-                or self.render_progress_label_var is None
-            ):
+            if self.render_progress_label_var is None:
                 return
 
             try:
-                pct = max(0.0, min(float(progress), 1.0)) * 100.0
+                pct = max(0.0, min(float(progress), 1.0))
             except (TypeError, ValueError):
                 pct = 0.0
-            self.render_progress_var.set(pct)
+
+            if pct > 0:
+                if self.render_total_tasks is None:
+                    estimated_total = round(1.0 / pct)
+                    self.render_total_tasks = max(1, estimated_total)
+                total = self.render_total_tasks or 1
+                current = min(total, int(round(pct * total)) + 1)
+            else:
+                total = self.render_total_tasks
+                current = 1 if total else None
 
             text = label.strip() if label else "Ready"
-            self.render_progress_label_var.set(f"Rendering: {text}")
+
+            if label:
+                if total:
+                    self.render_progress_label_var.set(
+                        f"({current}/{total}) Rendering: {text}"
+                    )
+                else:
+                    self.render_progress_label_var.set(f"Rendering: {text}")
+            else:
+                self.render_total_tasks = None
+                self.render_progress_label_var.set("Rendering: Ready")
 
         self.root.after(0, _update)
 
