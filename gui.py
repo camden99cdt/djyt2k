@@ -35,7 +35,7 @@ class YTDemucsApp:
     instances: list["YTDemucsApp"] = []
     master_window: "MasterWindow | None" = None
     METER_FLOOR_DB = -50.0
-    METER_WARN_DB = -3.0
+    METER_WARN_DB = -16.0
 
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -141,7 +141,7 @@ class YTDemucsApp:
         meter_column = ttk.Frame(meters_stack)
         meter_column.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         meter_column.columnconfigure(0, weight=1)
-        meter_column.rowconfigure(0, weight=0)
+        meter_column.rowconfigure(0, weight=1)
 
         self.audio_meter = ttk.Progressbar(
             meter_column,
@@ -151,10 +151,10 @@ class YTDemucsApp:
             orient="vertical",
             style=self.meter_style_names["normal"],
         )
-        self.audio_meter.grid(row=0, column=0)
+        self.audio_meter.grid(row=0, column=0, sticky="ns")
 
         self.audio_meter_label = ttk.Label(
-            meters_stack,
+            meter_column,
             text="-∞ dB",
             style="DisabledPlayback.TLabel",
         )
