@@ -34,6 +34,7 @@ FLAT_TO_SHARP = {
 class YTDemucsApp:
     instances: list["YTDemucsApp"] = []
     master_window: "MasterWindow | None" = None
+    METER_FLOOR_DB = -50.0
 
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -143,7 +144,7 @@ class YTDemucsApp:
         self.audio_meter = ttk.Progressbar(
             meter_column,
             mode="determinate",
-            maximum=60.0,  # dBFS scale, updated dynamically
+            maximum=1.0,  # normalized meter scale, updated dynamically
             length=220,
             orient="vertical",
             style="red.Horizontal.TProgressbar",
@@ -156,6 +157,7 @@ class YTDemucsApp:
             style="DisabledPlayback.TLabel",
         )
         self.audio_meter_label.grid(row=1, column=0, pady=(6, 0))
+        self.audio_meter_label_default_fg = self.audio_meter_label.cget("foreground")
 
         self.volume_container = ttk.Frame(meters_stack)
         self.volume_container.grid(row=0, column=1, sticky="nsew", rowspan=2)
@@ -1877,6 +1879,11 @@ class YTDemucsApp:
         self.gain_label.config(text="+0 dB")
         self.audio_meter.configure(value=0.0)
         self.audio_meter_label.config(text="-∞ dB")
+        self.apply_clip_style(
+            self.audio_meter_label,
+            getattr(self, "audio_meter_label_default_fg", None),
+            False,
+        )
         self.player.set_gain_db(0.0)
         self.set_playback_controls_state(False)
         self.update_key_table()
@@ -2207,19 +2214,21 @@ class YTDemucsApp:
                 total_str = self.format_time(duration)
                 self.time_label.config(text=f"{elapsed_str} / {total_str}")
 
-            level = self.player.get_output_level()
-            if level <= 1e-6:
-                meter_value = 0.0
-                db_text = "-∞ dB"
-            else:
-                db = max(-60.0, 20 * math.log10(level))
-                meter_value = db + 60.0
-                db_text = f"{db:.1f} dB"
+            level = max(0.0, self.player.get_output_level())
+            meter_value, db_text = self.level_to_meter(level)
+            clipping = self.player.is_clipping()
 
             if self.audio_meter is not None:
                 self.audio_meter.configure(value=meter_value)
             if self.audio_meter_label is not None:
-                self.audio_meter_label.config(text=db_text)
+                self.audio_meter_label.config(
+                    text=self.format_clip_text(db_text, clipping)
+                )
+            self.apply_clip_style(
+                self.audio_meter_label,
+                getattr(self, "audio_meter_label_default_fg", None),
+                clipping,
+            )
 
             if (
                 self.play_pause_button is not None
@@ -2232,6 +2241,30 @@ class YTDemucsApp:
         finally:
             self.root.after(100, self.update_playback_ui)
 
+
+    @staticmethod
+    def format_clip_text(base: str, clipping: bool) -> str:
+        return f"{base} • CLIP" if clipping else base
+
+    @staticmethod
+    def apply_clip_style(label: ttk.Label | None, default_fg: str | None, clipping: bool):
+        if label is None:
+            return
+        if clipping:
+            label.config(foreground="red")
+        elif default_fg is not None:
+            label.config(foreground=default_fg)
+
+    @classmethod
+    def level_to_meter(cls, level: float) -> tuple[float, str]:
+        if level <= 1e-9:
+            return 0.0, "-∞ dB"
+        db = 20 * math.log10(max(level, 1e-9))
+        db = max(cls.METER_FLOOR_DB, db)
+        span = abs(cls.METER_FLOOR_DB) if cls.METER_FLOOR_DB != 0 else 1.0
+        meter_value = (db - cls.METER_FLOOR_DB) / span
+        meter_value = max(0.0, min(meter_value, 1.0))
+        return meter_value, f"{db:.1f} dB"
 
     @staticmethod
     def format_time(seconds: float) -> str:
@@ -2419,6 +2452,10 @@ class MasterWindow:
         )
         self.master_meter.grid(row=2, column=0, sticky="ns", padx=(10, 3))
 
+        self.master_meter_label = ttk.Label(self.master_frame, text="-∞ dB")
+        self.master_meter_label.grid(row=3, column=0, columnspan=2, pady=(4, 6))
+        self.master_meter_label_default_fg = self.master_meter_label.cget("foreground")
+
         self.master_volume_var = tk.DoubleVar(value=StemAudioPlayer.get_global_master_volume())
         self.master_volume_slider = ttk.Scale(
             self.master_frame,
@@ -2434,17 +2471,17 @@ class MasterWindow:
         self.master_play_button = ttk.Button(
             self.master_frame, text="Play All", width=13, command=self.on_master_play_pause
         )
-        self.master_play_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        self.master_play_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 4))
 
         self.master_mute_button = ttk.Button(
             self.master_frame, text="Mute All", width=13, command=self.on_master_mute_all
         )
-        self.master_mute_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        self.master_mute_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
         self.master_stop_button = ttk.Button(
             self.master_frame, text="Stop All", width=13, command=self.on_master_stop_all
         )
-        self.master_stop_button.grid(row=5, column=0, columnspan=2, sticky="ew")
+        self.master_stop_button.grid(row=6, column=0, columnspan=2, sticky="ew")
 
         self.update_master_volume_label()
 
@@ -2508,7 +2545,7 @@ class MasterWindow:
         time_label.grid(row=1, column=0, columnspan=2, pady=(0, 6))
 
         meter = ttk.Progressbar(
-            frame, orient="vertical", mode="determinate", maximum=0.6, value=0.0, length=120
+            frame, orient="vertical", mode="determinate", maximum=1.0, value=0.0, length=120
         )
         meter.grid(row=2, column=0, sticky="ns", padx=(0, 6))
 
@@ -2550,6 +2587,7 @@ class MasterWindow:
             "frame": frame,
             "name_label": name_label,
             "time_label": time_label,
+            "time_label_fg": time_label.cget("foreground"),
             "meter": meter,
             "volume_var": volume_var,
             "mute_btn": mute_btn,
@@ -2823,6 +2861,7 @@ class MasterWindow:
 
         active_apps = self.refresh_sessions()
         levels: list[float] = []
+        any_clipping = False
         for app in active_apps:
             state = self.session_states.get(app)
             if not state:
@@ -2833,11 +2872,15 @@ class MasterWindow:
             )
 
             try:
-                level = max(0.0, min(app.player.get_output_level(), 1.0))
+                level = max(0.0, app.player.get_output_level())
+                clipping = app.player.is_clipping()
             except Exception:
                 level = 0.0
+                clipping = False
             levels.append(level)
-            state["meter"].configure(value=level)
+            meter_value, _ = YTDemucsApp.level_to_meter(level)
+            state["meter"].configure(value=meter_value)
+            any_clipping = any_clipping or clipping
 
             if not state.get("updating_volume"):
                 current_volume = app.get_master_volume()
@@ -2850,9 +2893,15 @@ class MasterWindow:
                 pos = max(0.0, min(app.player.get_position(), duration))
                 elapsed_str = YTDemucsApp.format_time(pos)
                 total_str = YTDemucsApp.format_time(duration)
-                state["time_label"].config(text=f"{elapsed_str} / {total_str}")
+                time_text = f"{elapsed_str} / {total_str}"
             except Exception:
-                state["time_label"].config(text="00:00 / 00:00")
+                time_text = "00:00 / 00:00"
+            state["time_label"].config(
+                text=YTDemucsApp.format_clip_text(time_text, clipping)
+            )
+            YTDemucsApp.apply_clip_style(
+                state.get("time_label"), state.get("time_label_fg"), clipping
+            )
 
             playback_state = app.get_playback_state()
             if playback_state == "playing":
@@ -2869,7 +2918,16 @@ class MasterWindow:
         self.update_master_play_button()
         if self.master_meter is not None:
             master_level = self.compute_master_level(levels) * StemAudioPlayer.get_global_master_volume()
-            self.master_meter.configure(value=master_level)
+            meter_value, db_text = YTDemucsApp.level_to_meter(master_level)
+            self.master_meter.configure(value=meter_value)
+            clip_text = YTDemucsApp.format_clip_text(db_text, any_clipping)
+            if hasattr(self, "master_meter_label"):
+                self.master_meter_label.config(text=clip_text)
+            YTDemucsApp.apply_clip_style(
+                getattr(self, "master_meter_label", None),
+                getattr(self, "master_meter_label_default_fg", None),
+                any_clipping,
+            )
         self.update_master_volume_label()
         self.window.after(200, self.update_loop)
 
