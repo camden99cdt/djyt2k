@@ -37,6 +37,21 @@ class YTDemucsApp:
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
 
+    @staticmethod
+    def _lighten_color(color: str, factor: float) -> str:
+        """Return a lighter hex color by blending toward white."""
+
+        color = color.lstrip("#")
+        if len(color) != 6:
+            return color
+        r = int(color[0:2], 16)
+        g = int(color[2:4], 16)
+        b = int(color[4:6], 16)
+        r = min(255, int(r + (255 - r) * factor))
+        g = min(255, int(g + (255 - g) * factor))
+        b = min(255, int(b + (255 - b) * factor))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.base_title = "YouTube \u2192 Demucs Stems"
@@ -49,17 +64,50 @@ class YTDemucsApp:
         self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
         self.setup_meter_styles()
+        default_tool_background = (
+            self.style.lookup("Toolbutton", "background")
+            or self.style.lookup("TButton", "background")
+            or "#f0f0f0"
+        )
+        default_tool_border = (
+            self.style.lookup("Toolbutton", "bordercolor")
+            or self.style.lookup("TButton", "bordercolor")
+            or "#b5b5b5"
+        )
         for style_name, color in [
             ("HighBandToggle.Toolbutton", "#ffd447"),
             ("MidBandToggle.Toolbutton", "#7ed957"),
             ("LowBandToggle.Toolbutton", "#5aa9ff"),
         ]:
+            lighter_fill = self._lighten_color(color, 0.18)
+            lighter_border = self._lighten_color(color, 0.22)
+            hover_default_fill = self._lighten_color(default_tool_background, 0.12)
             self.style.layout(style_name, self.style.layout("Toolbutton"))
-            self.style.configure(style_name, padding=(3, 10), background=color)
+            self.style.configure(
+                style_name,
+                padding=(3, 10),
+                background=color,
+                bordercolor=lighter_border,
+                darkcolor=color,
+                lightcolor=lighter_border,
+            )
             self.style.map(
                 style_name,
                 relief=[("pressed", "sunken"), ("selected", "sunken"), ("!selected", "flat")],
-                background=[("pressed", color), ("selected", color), ("!selected", color)],
+                background=[
+                    (("active", "selected"), lighter_fill),
+                    (("active", "!selected"), hover_default_fill),
+                    (("selected",), color),
+                    (("!selected",), default_tool_background),
+                ],
+                bordercolor=[
+                    (("active", "selected"), color),
+                    (("active", "!selected"), default_tool_border),
+                    (("selected",), lighter_border),
+                    (("!selected",), color),
+                ],
+                darkcolor=[(("selected",), color), (("!selected",), color)],
+                lightcolor=[(("selected",), lighter_border), (("!selected",), color)],
             )
         self.render_label_width_chars = 32
         self.style.configure(
