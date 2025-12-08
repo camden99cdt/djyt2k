@@ -49,6 +49,7 @@ class YTDemucsApp:
         self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
         self.setup_meter_styles()
+        self.style.configure("BandToggle.TCheckbutton", padding=(0, 8))
         self.render_label_width_chars = 32
         self.style.configure(
             "RenderProgress.TLabel",
@@ -139,6 +140,10 @@ class YTDemucsApp:
         left_column.rowconfigure(0, weight=0)
         left_column.rowconfigure(1, weight=1)
 
+        self.high_band_var = tk.BooleanVar(value=True)
+        self.mid_band_var = tk.BooleanVar(value=True)
+        self.low_band_var = tk.BooleanVar(value=True)
+
         self.thumbnail_label = ttk.Label(
             left_column,
             text="No\nthumbnail",
@@ -149,11 +154,49 @@ class YTDemucsApp:
 
         meters_stack = ttk.Frame(left_column)
         meters_stack.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
-        meters_stack.columnconfigure(0, weight=1)
+        meters_stack.columnconfigure(0, weight=0)
         meters_stack.columnconfigure(1, weight=1)
+        meters_stack.columnconfigure(2, weight=1)
         meters_stack.rowconfigure(0, weight=1)
+
+        filter_column = ttk.Frame(meters_stack)
+        filter_column.grid(row=0, column=0, sticky="ns", padx=(0, 6))
+        filter_column.columnconfigure(0, weight=1)
+        for r in range(3):
+            filter_column.rowconfigure(r, weight=1)
+
+        self.high_band_button = ttk.Checkbutton(
+            filter_column,
+            variable=self.high_band_var,
+            command=self.on_frequency_band_toggle,
+            style="BandToggle.TCheckbutton",
+            text="",
+            width=0,
+        )
+        self.high_band_button.grid(row=0, column=0, sticky="nsew", ipady=10)
+
+        self.mid_band_button = ttk.Checkbutton(
+            filter_column,
+            variable=self.mid_band_var,
+            command=self.on_frequency_band_toggle,
+            style="BandToggle.TCheckbutton",
+            text="",
+            width=0,
+        )
+        self.mid_band_button.grid(row=1, column=0, sticky="nsew", ipady=10)
+
+        self.low_band_button = ttk.Checkbutton(
+            filter_column,
+            variable=self.low_band_var,
+            command=self.on_frequency_band_toggle,
+            style="BandToggle.TCheckbutton",
+            text="",
+            width=0,
+        )
+        self.low_band_button.grid(row=2, column=0, sticky="nsew", ipady=10)
+
         meter_column = ttk.Frame(meters_stack)
-        meter_column.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        meter_column.grid(row=0, column=1, sticky="nsew", padx=(0, 6))
         meter_column.columnconfigure(0, weight=1)
         meter_column.rowconfigure(0, weight=1)
 
@@ -177,7 +220,7 @@ class YTDemucsApp:
         self.audio_meter_label.grid(row=1, column=0, pady=(6, 0))
 
         self.volume_container = ttk.Frame(meters_stack)
-        self.volume_container.grid(row=0, column=1, sticky="nsew", rowspan=2)
+        self.volume_container.grid(row=0, column=2, sticky="nsew", rowspan=2)
         self.volume_container.columnconfigure(0, weight=1)
         self.volume_container.rowconfigure(0, weight=1)
         self.volume_container.columnconfigure(2, weight=1)
@@ -297,6 +340,9 @@ class YTDemucsApp:
 
         self.playback_control_widgets.extend(
             [
+                self.high_band_button,
+                self.mid_band_button,
+                self.low_band_button,
                 self.audio_meter,
                 self.gain_checkbox,
                 self.gain_slider,
@@ -1418,6 +1464,9 @@ class YTDemucsApp:
         self.render_progress_label = None
         self.render_total_tasks = None
         self.playback_control_widgets = [
+            self.high_band_button,
+            self.mid_band_button,
+            self.low_band_button,
             self.audio_meter,
             self.gain_checkbox,
             self.gain_slider,
@@ -1457,6 +1506,7 @@ class YTDemucsApp:
         self.waveform_duration = self.player.get_duration()
 
         self.set_playback_controls_state(True)
+        self.reset_frequency_band_controls()
 
         # master volume (left column, vertical)
         self.volume_label = ttk.Label(self.volume_container, width=10, anchor="center", text="100%")
@@ -1945,6 +1995,7 @@ class YTDemucsApp:
         self.audio_meter_label.config(text="-∞ dB")
         self.player.set_gain_db(0.0)
         self.player.set_gain_enabled(False)
+        self.reset_frequency_band_controls()
         self.set_playback_controls_state(False)
         self.update_key_table()
         self.update_save_button_state()
@@ -1975,6 +2026,7 @@ class YTDemucsApp:
             self.reverb_enabled_var.set(False)
         if self.reverb_mix_var is not None:
             self.reverb_mix_var.set(0.45)
+        self.reset_frequency_band_controls()
 
         # stem selection — always revert to the All mix at default speed/pitch
         if self.all_var is not None:
@@ -2003,6 +2055,7 @@ class YTDemucsApp:
         self.player.set_gain_enabled(False)
         self.player.set_reverb_enabled(False)
         self.player.set_reverb_wet(0.45)
+        self.player.set_frequency_bands(True, True, True)
         self.update_reverb_controls_state()
 
         self.update_key_table(0.0)
@@ -2235,6 +2288,25 @@ class YTDemucsApp:
     def on_gain_toggle(self):
         enabled = bool(self.gain_enabled_var.get()) if self.gain_enabled_var else False
         self.player.set_gain_enabled(enabled)
+
+    def on_frequency_band_toggle(self):
+        low = bool(self.low_band_var.get()) if self.low_band_var else True
+        mid = bool(self.mid_band_var.get()) if self.mid_band_var else True
+        high = bool(self.high_band_var.get()) if self.high_band_var else True
+
+        if getattr(self, "player", None) is not None:
+            self.player.set_frequency_bands(low=low, mid=mid, high=high)
+
+    def reset_frequency_band_controls(self):
+        if self.high_band_var is not None:
+            self.high_band_var.set(True)
+        if self.mid_band_var is not None:
+            self.mid_band_var.set(True)
+        if self.low_band_var is not None:
+            self.low_band_var.set(True)
+
+        if getattr(self, "player", None) is not None:
+            self.player.set_frequency_bands(True, True, True)
 
     def on_reverb_toggle(self):
         enabled = bool(self.reverb_enabled_var.get()) if self.reverb_enabled_var else False

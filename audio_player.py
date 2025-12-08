@@ -215,6 +215,9 @@ class StemAudioPlayer:
     def set_reverb_wet(self, wet: float):
         self.session.set_reverb_wet(wet)
 
+    def set_frequency_bands(self, low: bool, mid: bool, high: bool):
+        self.session.set_frequency_bands(low, mid, high)
+
 
     def set_master_volume(self, volume: float):
         self.master_volume = max(0.0, min(float(volume), 1.0))
