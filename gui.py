@@ -267,8 +267,13 @@ class YTDemucsApp:
             row=0, column=1, sticky="ns", padx=10
         )
 
-        self.harmonics_frame = ttk.Frame(right_top)
-        self.harmonics_frame.grid(row=0, column=2, sticky="nsew")
+        self.sidebar_stack = ttk.Frame(right_top)
+        self.sidebar_stack.grid(row=0, column=2, sticky="nsew")
+        self.sidebar_stack.columnconfigure(0, weight=1)
+        self.sidebar_stack.rowconfigure(0, weight=1)
+
+        self.harmonics_frame = ttk.Frame(self.sidebar_stack)
+        self.harmonics_frame.grid(row=0, column=0, sticky="nsew")
         self.harmonics_frame.columnconfigure(0, weight=0)
         self.harmonics_frame.columnconfigure(1, weight=1)
 
@@ -299,8 +304,8 @@ class YTDemucsApp:
             value_lbl.grid(row=idx, column=1, sticky="e", pady=(0, 4), padx=(10, 0))
             self.key_table_value_labels[value_key] = value_lbl
 
-        self.loop_tools_frame = ttk.Frame(right_top)
-        self.loop_tools_frame.grid(row=0, column=2, sticky="nsew")
+        self.loop_tools_frame = ttk.Frame(self.sidebar_stack)
+        self.loop_tools_frame.grid(row=0, column=0, sticky="nsew")
         self.loop_tools_frame.columnconfigure(0, weight=1)
         self.play_from_loop_var = tk.BooleanVar(value=False)
 
@@ -370,7 +375,7 @@ class YTDemucsApp:
         )
         self.loop_end_value_label.grid(row=5, column=0, pady=(4, 0), sticky="ew")
 
-        self.loop_tools_frame.grid_remove()
+        self.harmonics_frame.tkraise()
 
         self.playback_control_widgets.extend(
             [
@@ -573,6 +578,7 @@ class YTDemucsApp:
         self.play_pause_button: ttk.Button | None = None
         self.stop_button: ttk.Button | None = None
         self.loop_button: ttk.Button | None = None
+        self.sidebar_stack: ttk.Frame | None = None
         self.harmonics_frame: ttk.Frame | None = None
         self.loop_tools_frame: ttk.Frame | None = None
         self.play_from_loop_var: tk.BooleanVar | None = None
@@ -1887,17 +1893,18 @@ class YTDemucsApp:
         self.loop_end_value_label.config(text=self.format_time_ms(end_sec))
 
     def update_loop_sidebar(self):
-        if self.harmonics_frame is None or self.loop_tools_frame is None:
+        if (
+            self.sidebar_stack is None
+            or self.harmonics_frame is None
+            or self.loop_tools_frame is None
+        ):
             return
 
         if self.player.loop_controller.enabled:
-            self.harmonics_frame.grid_remove()
-            self.loop_tools_frame.grid(row=0, column=2, sticky="nsew")
             self.loop_tools_frame.tkraise()
             self.update_loop_position_labels()
         else:
-            self.loop_tools_frame.grid_remove()
-            self.harmonics_frame.grid(row=0, column=2, sticky="nsew")
+            self.harmonics_frame.tkraise()
 
     def on_waveform_click(self, event):
         if self.wave_canvas is None or self.waveform_duration <= 0:
