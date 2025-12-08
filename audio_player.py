@@ -182,6 +182,32 @@ class StemAudioPlayer:
             progress_callback=self.render_progress_callback,
         )
 
+    def request_tempo_pitch_for_targets(
+        self,
+        rate: float,
+        semitones: float,
+        stems: Set[str],
+        include_mix: bool,
+        target_play_all: bool | None = None,
+        target_active_stems: Set[str] | None = None,
+    ):
+        if self.session.sample_rate is None:
+            return
+
+        rate = max(0.25, min(float(rate), 2.0))
+        semitones = max(-6.0, min(float(semitones), 6.0))
+
+        self.session.request_tempo_pitch_change(
+            new_tempo_rate=rate,
+            new_pitch_semitones=semitones,
+            target_stems=set(stems),
+            include_mix=include_mix,
+            target_play_all=target_play_all,
+            target_active_stems=target_active_stems,
+            log_callback=getattr(self, "log_callback", None),
+            progress_callback=self.render_progress_callback,
+        )
+
     def set_render_progress_callback(self, callback):
         """Optional UI hook to receive render progress updates."""
         self.render_progress_callback = callback

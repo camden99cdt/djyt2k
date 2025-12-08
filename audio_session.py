@@ -658,6 +658,8 @@ class AudioSession:
         new_pitch_semitones: float,
         target_stems: Optional[Set[str]] = None,
         include_mix: Optional[bool] = None,
+        target_play_all: Optional[bool] = None,
+        target_active_stems: Optional[Set[str]] = None,
         log_callback=None,
         progress_callback=None,
     ):
@@ -680,13 +682,6 @@ class AudioSession:
         new_tempo_rate = max(0.25, min(float(new_tempo_rate), 2.0))
         new_pitch_semitones = max(-6.0, min(6.0, float(new_pitch_semitones)))
 
-        # If exactly the same as current, do nothing
-        if (
-            abs(new_tempo_rate - self.tempo_rate) < 1e-3
-            and abs(new_pitch_semitones - self.pitch_semitones) < 1e-3
-        ):
-            return
-
         if include_mix is None:
             include_mix = self.play_all
 
@@ -697,6 +692,14 @@ class AudioSession:
             stems_to_process = {
                 name for name in target_stems if name in self.original_stem_data
             }
+
+        if (
+            abs(new_tempo_rate - self.tempo_rate) < 1e-3
+            and abs(new_pitch_semitones - self.pitch_semitones) < 1e-3
+            and not stems_to_process
+            and not include_mix
+        ):
+            return
 
         # When the "All" mix is active, only rebuild the mix—even if active_stems
         # was populated earlier for fallback purposes. Rendering stems in this
@@ -713,8 +716,12 @@ class AudioSession:
             base_stems={},
             base_mix=None,
             mark_missing=True,
-            target_play_all=self.play_all,
-            target_active_stems=set(self.active_stems),
+            target_play_all=self.play_all if target_play_all is None else target_play_all,
+            target_active_stems=(
+                set(self.active_stems)
+                if target_active_stems is None
+                else set(target_active_stems)
+            ),
             log_callback=log_callback,
             progress_callback=progress_callback,
         )
