@@ -70,6 +70,9 @@ class StemAudioPlayer:
         """
         Load full mix + stems. Returns (stem_names, stem_envelopes).
         """
+        # Stop any existing stream before replacing session data to avoid
+        # hardware pops from a live callback while buffers are swapped out.
+        self.stop_stream()
         self.stop()
         if not self.audio_ok:
             raise RuntimeError(f"Audio engine not available: {self.error_message}")
@@ -83,6 +86,9 @@ class StemAudioPlayer:
         """
         Load only full mix (skip separation). Returns ([], {}).
         """
+        # Stop any existing stream before replacing session data to avoid
+        # hardware pops from a live callback while buffers are swapped out.
+        self.stop_stream()
         self.stop()
         if not self.audio_ok:
             raise RuntimeError(f"Audio engine not available: {self.error_message}")
