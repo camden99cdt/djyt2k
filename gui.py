@@ -681,7 +681,7 @@ class YTDemucsApp:
         self.waveform_points: list[float] = []
         self.waveform_duration: float = 0.0
         self.stem_vars: dict[str, tk.BooleanVar] = {}
-        self.stem_checkbuttons: dict[str, ttk.Checkbutton] = {}
+        self.stem_checkbuttons: dict[str, tk.Checkbutton] = {}
         self.stem_display_state: dict[str, str] = {}
         self.last_stem_selection: set[str] = set()
 
@@ -1662,7 +1662,7 @@ class YTDemucsApp:
         # stem checkboxes (only if we actually have stems)
         for idx, stem_name in enumerate(stem_names):
             var = tk.BooleanVar(value=False)
-            cb = ttk.Checkbutton(
+            cb = tk.Checkbutton(
                 self.stems_frame,
                 text=stem_name,
                 variable=var,
@@ -1678,7 +1678,7 @@ class YTDemucsApp:
 
         # "All" checkbox (full mix)
         self.all_var = tk.BooleanVar(value=True)
-        cb_all = ttk.Checkbutton(
+        cb_all = tk.Checkbutton(
             self.stems_frame,
             text="All",
             variable=self.all_var,
