@@ -49,12 +49,18 @@ class YTDemucsApp:
         self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
         self.setup_meter_styles()
-        self.style.layout("BandToggle.Toolbutton", self.style.layout("Toolbutton"))
-        self.style.configure("BandToggle.Toolbutton", padding=(3, 10))
-        self.style.map(
-            "BandToggle.Toolbutton",
-            relief=[("pressed", "sunken"), ("selected", "sunken"), ("!selected", "flat")],
-        )
+        for style_name, color in [
+            ("HighBandToggle.Toolbutton", "#ffd447"),
+            ("MidBandToggle.Toolbutton", "#7ed957"),
+            ("LowBandToggle.Toolbutton", "#5aa9ff"),
+        ]:
+            self.style.layout(style_name, self.style.layout("Toolbutton"))
+            self.style.configure(style_name, padding=(3, 10), background=color)
+            self.style.map(
+                style_name,
+                relief=[("pressed", "sunken"), ("selected", "sunken"), ("!selected", "flat")],
+                background=[("pressed", color), ("selected", color), ("!selected", color)],
+            )
         self.render_label_width_chars = 32
         self.style.configure(
             "RenderProgress.TLabel",
@@ -174,9 +180,9 @@ class YTDemucsApp:
             filter_column,
             variable=self.high_band_var,
             command=self.on_frequency_band_toggle,
-            style="BandToggle.Toolbutton",
+            style="HighBandToggle.Toolbutton",
             text="",
-            width=0,
+            width=1,
         )
         self.high_band_button.grid(row=0, column=0, sticky="nsew", ipady=10)
 
@@ -184,9 +190,9 @@ class YTDemucsApp:
             filter_column,
             variable=self.mid_band_var,
             command=self.on_frequency_band_toggle,
-            style="BandToggle.Toolbutton",
+            style="MidBandToggle.Toolbutton",
             text="",
-            width=0,
+            width=1,
         )
         self.mid_band_button.grid(row=1, column=0, sticky="nsew", ipady=10)
 
@@ -194,11 +200,13 @@ class YTDemucsApp:
             filter_column,
             variable=self.low_band_var,
             command=self.on_frequency_band_toggle,
-            style="BandToggle.Toolbutton",
+            style="LowBandToggle.Toolbutton",
             text="",
-            width=0,
+            width=1,
         )
         self.low_band_button.grid(row=2, column=0, sticky="nsew", ipady=10)
+
+        ttk.Label(filter_column, text="Cut").grid(row=3, column=0, pady=(4, 0))
 
         meter_column = ttk.Frame(meters_stack)
         meter_column.grid(row=0, column=1, sticky="nsew", padx=(0, 6))
