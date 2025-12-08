@@ -1571,10 +1571,18 @@ class YTDemucsApp:
             self.reverb_checkbox,
             self.reverb_mix_slider,
             self.play_from_loop_checkbox,
+            self.crossfade_checkbox,
             self.loop_start_back_btn,
+            self.loop_start_back_btn,
+            self.loop_start_current_btn,
+            self.loop_start_forward_btn,
             self.loop_start_forward_btn,
             self.loop_end_back_btn,
+            self.loop_end_back_btn,
+            self.loop_end_current_btn,
             self.loop_end_forward_btn,
+            self.loop_end_forward_btn,
+            self.reset_loop_button,
         ]
         self.playback_label_widgets = [
             self.audio_meter_label,
