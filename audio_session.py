@@ -132,6 +132,7 @@ class AudioSession:
             "high": 1.0,
         }
         self._frequency_gain_ramp_samples = 1024
+        self._frequency_filter_needs_reset = False
 
         # PENDING config (being built in the background for a new tempo/pitch)
         self.pending_stem_data: Dict[str, np.ndarray] = {}
@@ -306,6 +307,7 @@ class AudioSession:
             self._frequency_band_gain = {"low": 1.0, "mid": 1.0, "high": 1.0}
             self._frequency_band_gain_target = {"low": 1.0, "mid": 1.0, "high": 1.0}
             self._frequency_gain_ramp_samples = 1024
+            self._frequency_filter_needs_reset = False
 
         with self._pending_lock:
             self.pending_stem_data = {}
@@ -714,6 +716,7 @@ class AudioSession:
         with self._frequency_filter_lock:
             self._frequency_filters = filters
             self._reset_filter_state_locked()
+            self._frequency_filter_needs_reset = False
 
     def _reset_filter_state_locked(self, initial_value: Optional[np.ndarray] = None):
         self._frequency_filter_states = {}
@@ -737,16 +740,22 @@ class AudioSession:
 
     def set_frequency_bands(self, low: bool, mid: bool, high: bool):
         with self._frequency_filter_lock:
-            self.frequency_bands_enabled = {
+            new_enabled = {
                 "low": bool(low),
                 "mid": bool(mid),
                 "high": bool(high),
             }
-            self._frequency_band_gain_target = {
+            new_targets = {
                 "low": 1.0 if low else 0.0,
                 "mid": 1.0 if mid else 0.0,
                 "high": 1.0 if high else 0.0,
             }
+
+            if new_enabled != self.frequency_bands_enabled or new_targets != self._frequency_band_gain_target:
+                self._frequency_filter_needs_reset = True
+
+            self.frequency_bands_enabled = new_enabled
+            self._frequency_band_gain_target = new_targets
 
     def _apply_frequency_filters(self, chunk: np.ndarray) -> np.ndarray:
         if chunk.size == 0:
@@ -764,9 +773,12 @@ class AudioSession:
         output = np.zeros_like(chunk, dtype="float32")
 
         with self._frequency_filter_lock:
-            if self._frequency_filters and not self._frequency_filter_states:
+            if self._frequency_filter_needs_reset or (
+                self._frequency_filters and not self._frequency_filter_states
+            ):
                 initial_sample = chunk[0] if chunk.size else None
                 self._reset_filter_state_locked(initial_value=initial_sample)
+                self._frequency_filter_needs_reset = False
 
             chunk_len = chunk.shape[0]
             ramp_samples = max(1, int(self._frequency_gain_ramp_samples))
