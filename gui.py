@@ -1523,14 +1523,14 @@ class YTDemucsApp:
             self.player.set_play_all(True)
 
         # playback speed (row in right column)
-        self.speed_var = tk.DoubleVar(value=1.0)
+        self.speed_var = tk.DoubleVar(value=0.5)
         self.speed_label = ttk.Label(self.speed_frame, text="1.00x")
         self.speed_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         speed_slider = ttk.Scale(
             self.speed_frame,
-            from_=0.25,
-            to=2.0,
+            from_=0.0,
+            to=1.0,
             orient="horizontal",
             variable=self.speed_var,
             command=self.on_speed_drag,   # update label while dragging
@@ -1964,7 +1964,7 @@ class YTDemucsApp:
         if self.volume_var is not None:
             self.volume_var.set(1.0)
         if self.speed_var is not None:
-            self.speed_var.set(1.0)
+            self.speed_var.set(self.speed_to_slider_position(1.0))
         if self.pitch_var is not None:
             self.pitch_var.set(0.0)
         if self.gain_enabled_var is not None:
@@ -2052,52 +2052,94 @@ class YTDemucsApp:
             return closest
         return v
 
+    @staticmethod
+    def _speed_slider_anchors() -> list[tuple[float, float]]:
+        return [
+            (0.0, 0.25),
+            (0.125, 0.5),
+            (0.25, 0.75),
+            (0.5, 1.0),
+            (0.75, 1.25),
+            (0.875, 1.5),
+            (1.0, 2.0),
+        ]
+
+    @classmethod
+    def slider_position_to_speed(cls, position: float) -> float:
+        pos = min(max(position, 0.0), 1.0)
+        anchors = cls._speed_slider_anchors()
+        for (p0, v0), (p1, v1) in zip(anchors, anchors[1:]):
+            if pos <= p1:
+                if p1 == p0:
+                    return v1
+                t = (pos - p0) / (p1 - p0)
+                log_v0 = math.log(v0)
+                log_v1 = math.log(v1)
+                return math.exp(log_v0 + (log_v1 - log_v0) * t)
+        return anchors[-1][1]
+
+    @classmethod
+    def speed_to_slider_position(cls, speed: float) -> float:
+        anchors = cls._speed_slider_anchors()
+        clamped_speed = min(max(speed, anchors[0][1]), anchors[-1][1])
+        for (p0, v0), (p1, v1) in zip(anchors, anchors[1:]):
+            if v0 <= clamped_speed <= v1:
+                if v1 == v0:
+                    return p1
+                log_v0 = math.log(v0)
+                log_v1 = math.log(v1)
+                log_s = math.log(clamped_speed)
+                t = (log_s - log_v0) / (log_v1 - log_v0)
+                return p0 + (p1 - p0) * t
+        return anchors[-1][0]
+
     def on_speed_drag(self, value: str):
         if self.speed_label is None or self.speed_var is None:
             return
         try:
-            raw_v = float(value)
+            slider_pos = float(value)
         except ValueError:
-            raw_v = 1.0
+            slider_pos = 0.5
 
-        snapped = self.snap_speed(raw_v)
-        if abs(snapped - raw_v) <= 0.04:
-            self.speed_var.set(snapped)
-            v = snapped
-        else:
-            v = raw_v
+        speed = self.slider_position_to_speed(slider_pos)
+        snapped = self.snap_speed(speed)
+        if abs(snapped - speed) <= 0.04:
+            slider_pos = self.speed_to_slider_position(snapped)
+            self.speed_var.set(slider_pos)
+            speed = snapped
 
-        self.speed_label.config(text=f"{v:.2f}x")
+        self.speed_label.config(text=f"{speed:.2f}x")
 
     def on_speed_release(self, event):
         if self.speed_var is None:
             return
-        raw_v = float(self.speed_var.get())
-        v = self.snap_speed(raw_v)
-        self.speed_var.set(v)
+        slider_pos = float(self.speed_var.get())
+        speed = self.slider_position_to_speed(slider_pos)
+        speed = self.snap_speed(speed)
+        self.speed_var.set(self.speed_to_slider_position(speed))
 
         if self.suppress_render_requests:
             if self.speed_label is not None:
-                self.speed_label.config(text=f"{v:.2f}x")
-            self.last_requested_state["speed"] = v
+                self.speed_label.config(text=f"{speed:.2f}x")
+            self.last_requested_state["speed"] = speed
             return
 
         if (
             self.render_tasks_running
             and self.render_revert_state
-            and abs(v - self.render_revert_state.get("speed", v)) < 1e-6
+            and abs(speed - self.render_revert_state.get("speed", speed)) < 1e-6
         ):
             self.cancel_render_tasks()
             return
 
         self.prepare_render_request()
         # tell the player to request the new tempo
-        self.player.set_tempo_rate(v)
+        self.player.set_tempo_rate(speed)
 
         if self.speed_label is not None:
-            self.speed_label.config(text=f"{v:.2f}x")
+            self.speed_label.config(text=f"{speed:.2f}x")
 
-        self.last_requested_state["speed"] = v
+        self.last_requested_state["speed"] = speed
 
         # optional: redraw waveform (time axis effectively changes)
         self.draw_waveform()
@@ -2305,7 +2347,9 @@ class YTDemucsApp:
         if self.stem_vars:
             stems = {name for name, var in self.stem_vars.items() if var.get()}
         return {
-            "speed": float(self.speed_var.get()) if self.speed_var is not None else 1.0,
+            "speed": self.slider_position_to_speed(float(self.speed_var.get()))
+            if self.speed_var is not None
+            else 1.0,
             "pitch": float(self.pitch_var.get()) if self.pitch_var is not None else 0.0,
             "all": bool(self.all_var.get()) if self.all_var is not None else True,
             "stems": stems,
@@ -2338,7 +2382,7 @@ class YTDemucsApp:
             target_stems = set(state.get("stems", set()))
 
             if self.speed_var is not None:
-                self.speed_var.set(target_speed)
+                self.speed_var.set(self.speed_to_slider_position(target_speed))
             if self.speed_label is not None:
                 self.speed_label.config(text=f"{target_speed:.2f}x")
 
