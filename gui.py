@@ -1641,19 +1641,22 @@ class YTDemucsApp:
     def on_waveform_configure(self, event):
         self.draw_waveform()
 
-    def update_waveform_from_selection(self):
+    def update_waveform_from_selection(self) -> bool:
         """
         Update player mode + waveform_points based on the current checkbox state.
         - If "All" is checked -> play full mix, waveform = full mix envelope
         - Else -> mix selected stems
         """
+        render_enqueued = False
         suppress = self.suppress_render_requests
         if self.all_var is not None and self.all_var.get():
             fallback_stems = set(self.last_stem_selection)
             if not fallback_stems:
                 fallback_stems = set(self.stem_vars.keys())
             if not suppress:
-                self.player.set_selection(True, fallback_stems)
+                render_enqueued = self.player.set_selection(
+                    True, fallback_stems, progress_callback=self.on_render_progress
+                )
             else:
                 self.player.session.play_all = True
                 self.player.session.active_stems = set(fallback_stems)
@@ -1667,11 +1670,15 @@ class YTDemucsApp:
             elif self.last_stem_selection:
                 active = set(self.last_stem_selection)
             if not suppress:
-                self.player.set_selection(False, active)
+                render_enqueued = self.player.set_selection(
+                    False, active, progress_callback=self.on_render_progress
+                )
             else:
                 self.player.session.play_all = False
                 self.player.session.active_stems = set(active)
             self.waveform_points = self.player.mix_envelopes(active)
+
+        return render_enqueued
 
     def draw_waveform(self):
         if self.wave_canvas is None:
@@ -2237,11 +2244,14 @@ class YTDemucsApp:
     def on_stem_toggle(self):
         if self.all_var is not None:
             self.all_var.set(False)
-        if not self.suppress_render_requests:
-            self.prepare_render_request()
-        self.update_waveform_from_selection()
+        previous_state = dict(self.last_requested_state)
+        render_enqueued = self.update_waveform_from_selection()
         self.draw_waveform()
         self.last_requested_state = self.capture_playback_state()
+
+        if render_enqueued and not self.suppress_render_requests:
+            self.render_revert_state = previous_state
+            self.render_tasks_running = True
 
     def on_all_toggle(self):
         if self.all_var is None:
@@ -2249,11 +2259,14 @@ class YTDemucsApp:
         if self.all_var.get():
             for var in self.stem_vars.values():
                 var.set(False)
-        if not self.suppress_render_requests:
-            self.prepare_render_request()
-        self.update_waveform_from_selection()
+        previous_state = dict(self.last_requested_state)
+        render_enqueued = self.update_waveform_from_selection()
         self.draw_waveform()
         self.last_requested_state = self.capture_playback_state()
+
+        if render_enqueued and not self.suppress_render_requests:
+            self.render_revert_state = previous_state
+            self.render_tasks_running = True
 
     def on_volume_change(self, value: str):
         """
