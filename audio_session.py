@@ -526,65 +526,6 @@ class AudioSession:
             self.pending_target_play_all = self.play_all
             self.pending_target_active_stems = set(self.active_stems)
 
-    def reset_to_original_mix(self, current_position_seconds: Optional[float] = None) -> Optional[int]:
-        """
-        Immediately revert playback buffers to the original full mix at 1x tempo
-        and 0 st pitch. This bypasses any stretched renders and clears pending
-        work so the "Reset" control restores the true original audio.
-
-        Returns a play_index (in samples) that preserves the fractional position
-        through the track when possible.
-        """
-        sr = self.sample_rate
-        if sr is None:
-            return None
-
-        old_total_samples = self.total_samples
-
-        self.tempo_rate = 1.0
-        self.pitch_semitones = 0.0
-        self.current_stem_data = dict(self.original_stem_data)
-        self.current_mix_data = self.original_mix
-        self.current_missing_stems = set()
-        self.total_samples = self._compute_total_samples(
-            self.current_stem_data, self.current_mix_data
-        )
-
-        self.play_all = True
-        self.active_stems = set(self.original_stem_data.keys())
-        self.pending_target_play_all = True
-        self.pending_target_active_stems = set(self.active_stems)
-
-        with self._pending_lock:
-            self._pending_generation += 1
-            self.pending_ready = False
-            self.pending_stem_data = {}
-            self.pending_mix_data = None
-            self.pending_missing_stems = set()
-            self.pending_total_samples = 0
-            self.pending_tempo_rate = self.tempo_rate
-            self.pending_pitch_semitones = self.pitch_semitones
-            self.pending_target_play_all = self.play_all
-            self.pending_target_active_stems = set(self.active_stems)
-
-        self._sync_reverb_states(reset=True)
-
-        if current_position_seconds is None:
-            return 0
-
-        if old_total_samples <= 0 or self.total_samples <= 0:
-            return 0
-
-        old_duration = old_total_samples / float(sr)
-        new_duration = self.total_samples / float(sr)
-        if old_duration <= 0.0 or new_duration <= 0.0:
-            return 0
-
-        progress = max(0.0, min(current_position_seconds / old_duration, 1.0))
-        new_pos_seconds = progress * new_duration
-        new_index = int(new_pos_seconds * sr)
-        return min(new_index, self.total_samples - 1)
-
     def set_selection(
         self,
         play_all: bool,
