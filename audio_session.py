@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple, Set, Optional
 
 import numpy as np
 import soundfile as sf
+from scipy import signal
 import librosa
 
 
@@ -134,6 +135,11 @@ class AudioSession:
         self.pending_target_play_all: bool = False
         self.pending_target_active_stems: Set[str] = set()
 
+        # 3-band EQ
+        self.eq_gains_db: Dict[str, float] = {"lo": 0.0, "mid": 0.0, "hi": 0.0}
+        self.eq_sos: Dict[str, np.ndarray] = {}
+        self.eq_states: Dict[str, np.ndarray] = {}
+
     # -------------------------------------------------------------------------
     # LOADING
     # -------------------------------------------------------------------------
@@ -187,6 +193,8 @@ class AudioSession:
         self.current_mix_data = self.original_mix
         self.total_samples = self._compute_total_samples(self.current_stem_data, self.current_mix_data)
 
+        self._configure_eq_filters()
+
         # Envelopes from original audio only
         self.stem_envelopes.clear()
         for stem_name, data in self.original_stem_data.items():
@@ -233,6 +241,8 @@ class AudioSession:
         self.current_mix_data = self.original_mix
         self.total_samples = self._compute_total_samples(self.current_stem_data, self.current_mix_data)
 
+        self._configure_eq_filters()
+
         self.mix_envelope = self._build_envelope(self.original_mix)
         self.play_all = True
         self.active_stems = set()
@@ -274,6 +284,10 @@ class AudioSession:
         self.reverb_enabled = False
         self.reverb_wet = 0.45
 
+        self.eq_gains_db = {"lo": 0.0, "mid": 0.0, "hi": 0.0}
+        self.eq_sos = {}
+        self.eq_states = {}
+
         with self._pending_lock:
             self.pending_stem_data = {}
             self.pending_mix_data = None
@@ -281,6 +295,30 @@ class AudioSession:
             self.pending_total_samples = 0
             self.pending_ready = False
             self._pending_generation = 0
+
+    def _configure_eq_filters(self):
+        self.eq_sos = {}
+        self.eq_states = {}
+
+        if self.sample_rate is None:
+            return
+
+        nyquist = self.sample_rate / 2.0
+        band_edges = {
+            "lo": (20.0, 200.0),
+            "mid": (200.0, 5000.0),
+            "hi": (5000.0, min(20000.0, nyquist * 0.99)),
+        }
+
+        for band, (low, high) in band_edges.items():
+            high = min(high, nyquist * 0.99)
+            if low >= nyquist or high <= low:
+                continue
+
+            normalized = (low / nyquist, high / nyquist)
+            sos = signal.butter(4, normalized, btype="bandpass", output="sos")
+            self.eq_sos[band] = sos.astype("float32")
+            self.eq_states[band] = np.zeros((sos.shape[0], 2), dtype="float32")
 
     # -------------------------------------------------------------------------
     # ENVELOPES (from ORIGINAL audio)
@@ -629,6 +667,11 @@ class AudioSession:
     def set_reverb_wet(self, wet: float):
         self.reverb_wet = max(0.0, min(float(wet), 1.0))
 
+    def set_eq_gain(self, band: str, gain_db: float):
+        if band not in self.eq_gains_db:
+            return
+        self.eq_gains_db[band] = max(-50.0, min(float(gain_db), 10.0))
+
     def _sync_reverb_states(self, reset: bool = False):
         targets = self._reverb_targets()
         for name in list(self.reverb_states.keys()):
@@ -840,6 +883,29 @@ class AudioSession:
                 total = min(total, n)
         return total
 
+    def _apply_eq(self, data: np.ndarray) -> np.ndarray:
+        if data.size == 0 or not self.eq_sos:
+            return data
+
+        base = np.asarray(data, dtype="float32")
+        output = base.copy()
+
+        for band, sos in self.eq_sos.items():
+            gain_db = self.eq_gains_db.get(band, 0.0)
+            delta_gain = 10 ** (gain_db / 20.0) - 1.0
+            if abs(delta_gain) < 1e-3:
+                continue
+
+            zi = self.eq_states.get(band)
+            if zi is None or zi.shape != (sos.shape[0], 2):
+                zi = np.zeros((sos.shape[0], 2), dtype="float32")
+
+            filtered, zf = signal.sosfilt(sos, base, zi=zi)
+            self.eq_states[band] = zf
+            output += filtered * delta_gain
+
+        return output.astype("float32")
+
     def get_chunk(self, start: int, frames: int) -> np.ndarray:
         """
         Return a mono chunk of length `frames` from either:
@@ -894,10 +960,12 @@ class AudioSession:
 
         if wet_mix is not None:
             mixed = dry_mix * (1.0 - wet_amount) + wet_mix * wet_amount
+            mixed = self._apply_eq(mixed)
             np.clip(mixed, -1.0, 1.0, out=mixed)
             return mixed
 
-        return dry_mix
+        processed = self._apply_eq(dry_mix)
+        return processed
 
     # -------------------------------------------------------------------------
     # DURATION

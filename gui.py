@@ -199,10 +199,12 @@ class YTDemucsApp:
         sliders_column.columnconfigure(0, weight=1)
         sliders_column.rowconfigure(0, weight=1)
         sliders_column.rowconfigure(1, weight=1)
+        sliders_column.rowconfigure(2, weight=1)
 
         self.reverb_enabled_var = tk.BooleanVar(value=False)
         self.reverb_mix_var = tk.DoubleVar(value=0.45)
         self.gain_enabled_var = tk.BooleanVar(value=False)
+        self.eq_vars = {band: tk.DoubleVar(value=0.5) for band in ("lo", "mid", "hi")}
 
         reverb_frame = ttk.Frame(sliders_column)
         reverb_frame.grid(row=0, column=0, sticky="ew")
@@ -263,6 +265,31 @@ class YTDemucsApp:
         self.gain_slider.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(6, 6))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
 
+        eq_frame = ttk.Frame(sliders_column)
+        eq_frame.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
+        eq_frame.columnconfigure(0, weight=1)
+        ttk.Label(eq_frame, text="3-Band EQ").grid(row=0, column=0, sticky="w")
+
+        eq_sliders = ttk.Frame(eq_frame)
+        eq_sliders.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        self.eq_slider_widgets: dict[str, ttk.Scale] = {}
+        for idx, band in enumerate(["lo", "mid", "hi"]):
+            eq_sliders.columnconfigure(idx, weight=1)
+            slider = ttk.Scale(
+                eq_sliders,
+                from_=1.0,
+                to=0.0,
+                orient="vertical",
+                variable=self.eq_vars[band],
+                command=lambda value, b=band: self.on_eq_change(b, value),
+                length=160,
+            )
+            slider.grid(row=0, column=idx, padx=4, sticky="ns")
+            slider.bind("<ButtonRelease-1>", lambda event, b=band: self.on_eq_release(b))
+            self.eq_slider_widgets[band] = slider
+
+            ttk.Label(eq_sliders, text=band).grid(row=1, column=idx, pady=(6, 0))
+
         ttk.Separator(right_top, orient="vertical").grid(
             row=0, column=1, sticky="ns", padx=10
         )
@@ -302,6 +329,7 @@ class YTDemucsApp:
                 self.gain_slider,
                 self.reverb_checkbox,
                 self.reverb_mix_slider,
+                *self.eq_slider_widgets.values(),
             ]
         )
         self.playback_label_widgets.extend(
@@ -2155,6 +2183,16 @@ class YTDemucsApp:
         pos = max(0.0, min(position, 1.0))
         return (26.6666666667 * (pos**3)) - (20.0 * (pos**2)) + (13.3333333333 * pos)
 
+    @staticmethod
+    def eq_db_from_slider(position: float) -> float:
+        pos = max(0.0, min(position, 1.0))
+        if pos >= 0.5:
+            t = (pos - 0.5) / 0.5
+            return 10.0 * math.log10(1 + 9 * t)
+
+        t = (0.5 - pos) / 0.5
+        return -50.0 * math.log10(1 + 9 * t)
+
     def update_gain_label(self, gain_db: float):
         if self.gain_label is not None:
             self.gain_label.config(text=f"{gain_db:+.1f} dB")
@@ -2182,6 +2220,29 @@ class YTDemucsApp:
         gain_db = self.gain_db_from_slider(slider_pos)
         self.player.set_gain_db(gain_db)
         self.update_gain_label(gain_db)
+
+    def on_eq_change(self, band: str, value: str):
+        try:
+            raw = float(value)
+        except ValueError:
+            raw = 0.5
+
+        pos = max(0.0, min(raw, 1.0))
+        self.eq_vars[band].set(pos)
+        gain_db = self.eq_db_from_slider(pos)
+        self.player.set_eq_gain(band, gain_db)
+
+    def on_eq_release(self, band: str):
+        if band not in self.eq_vars:
+            return
+
+        pos = max(0.0, min(float(self.eq_vars[band].get()), 1.0))
+        if abs(pos - 0.5) <= 0.03:
+            pos = 0.5
+            self.eq_vars[band].set(pos)
+
+        gain_db = self.eq_db_from_slider(pos)
+        self.player.set_eq_gain(band, gain_db)
 
     def on_gain_toggle(self):
         enabled = bool(self.gain_enabled_var.get()) if self.gain_enabled_var else False
