@@ -635,6 +635,13 @@ class AudioSession:
                 name for name in target_stems if name in self.original_stem_data
             }
 
+        # When the "All" mix is active, only rebuild the mix—even if active_stems
+        # was populated earlier for fallback purposes. Rendering stems in this
+        # mode is unnecessary and caused extra background work when changing
+        # tempo/pitch while "All" was selected.
+        if include_mix and self.play_all:
+            stems_to_process.clear()
+
         self._queue_build(
             tempo_rate=new_tempo_rate,
             pitch_semitones=new_pitch_semitones,
