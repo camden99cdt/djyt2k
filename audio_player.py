@@ -43,6 +43,7 @@ class StemAudioPlayer:
 
         self.master_volume: float = 1.0
         self.gain_db: float = 0.0
+        self.gain_enabled: bool = False
         self.output_level: float = 0.0
         self.clipping: bool = False
 
@@ -210,7 +211,10 @@ class StemAudioPlayer:
         self.master_volume = max(0.0, min(float(volume), 1.0))
 
     def set_gain_db(self, gain_db: float):
-        self.gain_db = max(-10.0, min(float(gain_db), 10.0))
+        self.gain_db = max(0.0, min(float(gain_db), 20.0))
+
+    def set_gain_enabled(self, enabled: bool):
+        self.gain_enabled = bool(enabled)
 
     def get_output_level(self) -> float:
         return self.output_level
@@ -278,7 +282,8 @@ class StemAudioPlayer:
                 self.play_index = 0
 
         # Apply master volume and clip
-        gain = 10 ** (self.gain_db / 20.0)
+        gain_db = self.gain_db if self.gain_enabled else 0.0
+        gain = 10 ** (gain_db / 20.0)
         chunk = chunk * self.master_volume * gain * self.global_master_volume
         try:
             self.clipping = bool(np.any(np.abs(chunk) > 1.0))

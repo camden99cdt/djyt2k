@@ -48,6 +48,8 @@ class YTDemucsApp:
         self.style = ttk.Style(self.root)
         self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
+        self.style.configure("Effect.Horizontal.TScale", troughcolor="#d9d9d9")
+        self.style.configure("EffectDisabled.Horizontal.TScale", troughcolor="#ededed")
         self.setup_meter_styles()
         self.render_label_width_chars = 32
         self.style.configure(
@@ -202,6 +204,7 @@ class YTDemucsApp:
 
         self.reverb_enabled_var = tk.BooleanVar(value=False)
         self.reverb_mix_var = tk.DoubleVar(value=0.45)
+        self.gain_enabled_var = tk.BooleanVar(value=False)
 
         reverb_frame = ttk.Frame(sliders_column)
         reverb_frame.grid(row=0, column=0, sticky="ew")
@@ -226,6 +229,7 @@ class YTDemucsApp:
             to=1.0,
             variable=self.reverb_mix_var,
             command=self.on_reverb_mix_change,
+            style="EffectDisabled.Horizontal.TScale",
             length=200,
         )
         self.reverb_mix_slider.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 6))
@@ -236,8 +240,13 @@ class YTDemucsApp:
         gain_frame.columnconfigure(0, weight=1)
         gain_frame.columnconfigure(1, weight=1)
 
-        self.gain_title_label = ttk.Label(gain_frame, text="Gain")
-        self.gain_title_label.grid(row=0, column=0, sticky="w")
+        self.gain_checkbox = ttk.Checkbutton(
+            gain_frame,
+            text="Gain",
+            variable=self.gain_enabled_var,
+            command=self.on_gain_toggle,
+        )
+        self.gain_checkbox.grid(row=0, column=0, sticky="w")
 
         self.gain_var = tk.DoubleVar(value=0.0)
         self.gain_label = ttk.Label(
@@ -248,15 +257,15 @@ class YTDemucsApp:
 
         self.gain_slider = ttk.Scale(
             gain_frame,
-            from_=-10.0,
-            to=10.0,
+            from_=0.0,
+            to=1.0,
             variable=self.gain_var,
             command=self.on_gain_change,
+            style="EffectDisabled.Horizontal.TScale",
             length=200,
         )
         self.gain_slider.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(6, 6))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
-        self.playback_label_widgets.append(self.gain_title_label)
 
         ttk.Separator(right_top, orient="vertical").grid(
             row=0, column=1, sticky="ns", padx=10
@@ -291,12 +300,11 @@ class YTDemucsApp:
             self.key_table_value_labels[value_key] = value_lbl
 
         self.playback_control_widgets.extend(
-            [self.audio_meter, self.gain_slider, self.reverb_checkbox, self.reverb_mix_slider]
+            [self.audio_meter, self.gain_slider, self.gain_checkbox, self.reverb_checkbox, self.reverb_mix_slider]
         )
         self.playback_label_widgets.extend(
             [
                 self.audio_meter_label,
-                self.gain_title_label,
                 self.gain_label,
                 self.thumbnail_label,
                 self.reverb_mix_label,
@@ -304,6 +312,9 @@ class YTDemucsApp:
         )
         self.playback_label_widgets.extend(self.key_table_headers)
         self.playback_label_widgets.extend(self.key_table_value_labels.values())
+
+        self.update_reverb_controls_state()
+        self.update_gain_controls_state()
 
         right_bottom = ttk.Frame(right_column)
         right_bottom.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
@@ -748,6 +759,7 @@ class YTDemucsApp:
                     pass
 
         self.update_reverb_controls_state()
+        self.update_gain_controls_state()
 
     # ---------- search suggestions ----------
 
@@ -1918,12 +1930,15 @@ class YTDemucsApp:
 
         self.thumbnail_image = None
         self.thumbnail_label.configure(image="", text="No\nthumbnail")
+        if self.gain_enabled_var is not None:
+            self.gain_enabled_var.set(False)
         self.gain_var.set(0.0)
         self.gain_label.config(text="+0 dB")
         self.audio_meter.configure(
             value=0.0, style=self.meter_style_names.get("normal", "")
         )
         self.audio_meter_label.config(text="-∞ dB")
+        self.player.set_gain_enabled(False)
         self.player.set_gain_db(0.0)
         self.set_playback_controls_state(False)
         self.update_key_table()
@@ -1949,6 +1964,8 @@ class YTDemucsApp:
             self.pitch_var.set(0.0)
         if self.gain_var is not None:
             self.gain_var.set(0.0)
+        if self.gain_enabled_var is not None:
+            self.gain_enabled_var.set(False)
         if self.reverb_enabled_var is not None:
             self.reverb_enabled_var.set(False)
         if self.reverb_mix_var is not None:
@@ -1978,9 +1995,11 @@ class YTDemucsApp:
         self.player.reset_to_original_mix()
         self.player.set_master_volume(1.0)
         self.player.set_gain_db(0.0)
+        self.player.set_gain_enabled(False)
         self.player.set_reverb_enabled(False)
         self.player.set_reverb_wet(0.45)
         self.update_reverb_controls_state()
+        self.update_gain_controls_state()
 
         self.update_key_table(0.0)
 
@@ -2135,23 +2154,26 @@ class YTDemucsApp:
         self.draw_waveform()
 
     @staticmethod
-    def snap_gain(value: float) -> float:
-        if abs(value) < 0.25:
-            return 0.0
-        return max(-10.0, min(10.0, value))
+    def gain_slider_to_db(position: float) -> float:
+        position = max(0.0, min(float(position), 1.0))
+        base = 9.0
+        return 20.0 * ((base**position) - 1) / (base - 1)
+
+    @staticmethod
+    def gain_db_to_slider(db: float) -> float:
+        db = max(0.0, min(float(db), 20.0))
+        base = 9.0
+        return math.log(1 + ((base - 1) * db / 20.0), base)
 
     def on_gain_change(self, value: str):
         try:
-            raw = float(value)
+            position = float(value)
         except ValueError:
-            raw = 0.0
+            position = 0.0
 
-        snapped = self.snap_gain(raw)
-        if abs(snapped - raw) <= 0.15:
-            self.gain_var.set(snapped)
-            gain = snapped
-        else:
-            gain = raw
+        position = max(0.0, min(position, 1.0))
+        self.gain_var.set(position)
+        gain = self.gain_slider_to_db(position)
 
         self.player.set_gain_db(gain)
         if self.gain_label is not None:
@@ -2160,12 +2182,14 @@ class YTDemucsApp:
     def on_gain_release(self, event):
         if self.gain_var is None:
             return
-        value = float(self.gain_var.get())
-        snapped = self.snap_gain(value)
-        self.gain_var.set(snapped)
-        self.player.set_gain_db(snapped)
-        if self.gain_label is not None:
-            self.gain_label.config(text=f"{snapped:+.1f} dB")
+        self.on_gain_change(str(self.gain_var.get()))
+
+    def on_gain_toggle(self):
+        enabled = bool(self.gain_enabled_var.get()) if self.gain_enabled_var else False
+        self.player.set_gain_enabled(enabled)
+        current_db = self.gain_slider_to_db(float(self.gain_var.get()))
+        self.player.set_gain_db(current_db)
+        self.update_gain_controls_state()
 
     def on_reverb_toggle(self):
         enabled = bool(self.reverb_enabled_var.get()) if self.reverb_enabled_var else False
@@ -2187,15 +2211,50 @@ class YTDemucsApp:
             self.reverb_mix_label.config(text=f"{pct}% wet")
 
     def update_reverb_controls_state(self):
-        slider_state = "disabled"
-        if self.reverb_enabled_var is not None and self.playback_enabled:
-            slider_state = "normal" if self.reverb_enabled_var.get() else "disabled"
+        enabled = bool(self.reverb_enabled_var.get()) if self.reverb_enabled_var else False
+        active = self.playback_enabled and enabled
+        slider_style = "Effect.Horizontal.TScale" if active else "EffectDisabled.Horizontal.TScale"
+        label_style = "TLabel" if active else "DisabledPlayback.TLabel"
+        if self.reverb_mix_label is not None:
+            try:
+                self.reverb_mix_label.configure(style=label_style)
+            except Exception:
+                pass
         if self.reverb_mix_slider is not None:
+            try:
+                self.reverb_mix_slider.configure(style=slider_style)
+            except Exception:
+                pass
+            slider_state = "normal" if self.playback_enabled else "disabled"
             try:
                 self.reverb_mix_slider.state(["!disabled"] if slider_state == "normal" else ["disabled"])
             except Exception:
                 try:
                     self.reverb_mix_slider.configure(state=slider_state)
+                except Exception:
+                    pass
+
+    def update_gain_controls_state(self):
+        enabled = bool(self.gain_enabled_var.get()) if self.gain_enabled_var else False
+        active = self.playback_enabled and enabled
+        slider_style = "Effect.Horizontal.TScale" if active else "EffectDisabled.Horizontal.TScale"
+        label_style = "TLabel" if active else "DisabledPlayback.TLabel"
+        if self.gain_label is not None:
+            try:
+                self.gain_label.configure(style=label_style)
+            except Exception:
+                pass
+        if self.gain_slider is not None:
+            try:
+                self.gain_slider.configure(style=slider_style)
+            except Exception:
+                pass
+            slider_state = "normal" if self.playback_enabled else "disabled"
+            try:
+                self.gain_slider.state(["!disabled"] if slider_state == "normal" else ["disabled"])
+            except Exception:
+                try:
+                    self.gain_slider.configure(state=slider_state)
                 except Exception:
                     pass
 
