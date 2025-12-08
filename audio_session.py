@@ -122,6 +122,7 @@ class AudioSession:
         self.pending_ready: bool = False
         self._pending_generation: int = 0  # to discard stale builds
         self._pending_lock = threading.Lock()
+        self._active_render_queue: Optional["_RenderQueueState"] = None
 
         # Envelopes for UI (built from ORIGINAL audio only)
         self.stem_envelopes: Dict[str, List[float]] = {}
@@ -374,6 +375,137 @@ class AudioSession:
         np.clip(y, -1.0, 1.0, out=y)
         return np.asarray(y, dtype="float32")
 
+
+class _RenderQueueState:
+    MIX_TASK = "__mix__"
+
+    def __init__(
+        self,
+        generation: int,
+        tempo_rate: float,
+        pitch_semitones: float,
+        include_mix: bool,
+        base_stems: Dict[str, np.ndarray],
+        base_mix: Optional[np.ndarray],
+        initial_tasks: Set[str],
+        target_play_all: bool,
+        target_active_stems: Set[str],
+    ):
+        self.generation = generation
+        self.tempo_rate = tempo_rate
+        self.pitch_semitones = pitch_semitones
+        self.include_mix = include_mix
+        self.new_stems: Dict[str, np.ndarray] = dict(base_stems)
+        self.new_mix: Optional[np.ndarray] = base_mix
+        self.target_play_all = bool(target_play_all)
+        self.target_active_stems = set(target_active_stems)
+        self.tasks: List[str] = list(initial_tasks)
+        self.in_progress: Optional[str] = None
+        self.completed_count: int = 0
+        self.total_items: int = len(self.tasks) + (
+            1 if (include_mix and base_mix is None) else 0
+        )
+        self.lock = threading.Lock()
+
+    def _format_label(self, name: str) -> str:
+        stem_name = "mix" if name == self.MIX_TASK else name
+        return f"{stem_name}, {self.tempo_rate:.2f}x, {self.pitch_semitones:+.1f} st"
+
+    def _desired_stems(self) -> Set[str]:
+        return set() if self.target_play_all else set(self.target_active_stems)
+
+    def report_progress(self, progress_callback, label_name: Optional[str] = None):
+        if progress_callback is None:
+            return
+        with self.lock:
+            total = max(1, self.total_items) if self.in_progress or self.tasks else 1
+            completed = max(0, min(self.completed_count, total))
+            name = label_name or self.in_progress or (self.tasks[0] if self.tasks else "")
+            label = self._format_label(name) if name else ""
+        progress_callback(completed / float(total), label, total)
+
+    def set_in_progress(self, name: str, progress_callback):
+        with self.lock:
+            self.in_progress = name
+        self.report_progress(progress_callback, name)
+
+    def should_keep_result(self, name: str) -> bool:
+        with self.lock:
+            if name == self.MIX_TASK:
+                return self.target_play_all
+            return (not self.target_play_all) and (name in self.target_active_stems)
+
+    def mark_completed(self, name: str, keep_result: bool, progress_callback):
+        with self.lock:
+            if keep_result:
+                self.completed_count += 1
+            if name == self.in_progress:
+                self.in_progress = None
+            self.total_items = max(self.total_items, self.completed_count)
+        self.report_progress(progress_callback)
+
+    def add_task(self, name: str):
+        with self.lock:
+            if name in self.tasks or name == self.in_progress:
+                return
+            if name != self.MIX_TASK and name in self.new_stems:
+                return
+            if name == self.MIX_TASK and self.new_mix is not None:
+                return
+            self.tasks.append(name)
+            self.total_items += 1
+
+    def remove_task(self, name: str):
+        with self.lock:
+            if name in self.tasks:
+                self.tasks.remove(name)
+                self.total_items = max(self.completed_count, self.total_items - 1)
+            if name == self.in_progress:
+                self.in_progress = None
+
+    def next_task(self) -> Optional[str]:
+        with self.lock:
+            if self.tasks:
+                return self.tasks.pop(0)
+            return None
+
+    def update_targets(
+        self,
+        play_all: bool,
+        active_stems: Set[str],
+        progress_callback,
+    ):
+        desired_stems = set(active_stems)
+        with self.lock:
+            self.target_play_all = bool(play_all)
+            self.target_active_stems = set(desired_stems)
+
+        if self.target_play_all:
+            # Switch to mix-only
+            self.tasks = [t for t in self.tasks if t == self.MIX_TASK]
+            self.total_items = (
+                1 if (self.new_mix is None and self.in_progress != self.MIX_TASK) else 0
+            )
+            if self.new_mix is None and self.in_progress != self.MIX_TASK:
+                self.add_task(self.MIX_TASK)
+        else:
+            # Remove mix tasks when switching to stems
+            self.remove_task(self.MIX_TASK)
+
+            # Drop stems no longer desired
+            for task in list(self.tasks):
+                if task != self.MIX_TASK and task not in desired_stems:
+                    self.remove_task(task)
+
+            # Add new stems that are now desired
+            for stem in desired_stems:
+                self.add_task(stem)
+
+        with self.lock:
+            self.completed_count = min(self.completed_count, self.total_items)
+
+        self.report_progress(progress_callback)
+
     def _queue_build(
         self,
         tempo_rate: float,
@@ -416,83 +548,113 @@ class AudioSession:
                         f"pitch={pitch_semitones:+.1f} st..."
                     )
 
-                total_items = len(stems_to_build) + (1 if include_mix else 0)
-                completed = 0
-
                 sr = self.sample_rate
                 if sr is None:
                     return
 
-                new_stems: Dict[str, np.ndarray] = dict(base_stems)
-                for name in stems_to_build:
+                queue_state = self._active_render_queue
+                if queue_state is None:
+                    return
+
+                if queue_state.total_items == 0 and queue_state.new_mix is not None:
                     if abort_if_stale():
                         return
-                    orig = self.original_stem_data.get(name)
-                    if orig is None:
-                        continue
-                    if progress_callback:
-                        progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"{name}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
-                            total_items,
+                    with self._pending_lock:
+                        if generation != self._pending_generation:
+                            return
+                        self.pending_stem_data = dict(queue_state.new_stems)
+                        self.pending_mix_data = queue_state.new_mix
+                        self.pending_tempo_rate = tempo_rate
+                        self.pending_pitch_semitones = pitch_semitones
+                        self.pending_total_samples = self._compute_total_samples(
+                            queue_state.new_stems, queue_state.new_mix
                         )
-                    new_stems[name] = self._apply_tempo_pitch(
+                        self.pending_missing_stems = set()
+                        self.pending_ready = True
+                        self._active_render_queue = None
+                    if progress_callback:
+                        progress_callback(1.0, "", 1)
+                    return
+
+                while True:
+                    if abort_if_stale():
+                        return
+
+                    task = queue_state.next_task()
+                    if task is None:
+                        break
+
+                    queue_state.set_in_progress(task, progress_callback)
+
+                    if task == _RenderQueueState.MIX_TASK:
+                        if self.original_mix is None:
+                            queue_state.mark_completed(task, False, progress_callback)
+                            continue
+                        processed = self._apply_tempo_pitch(
+                            data=self.original_mix,
+                            tempo_rate=tempo_rate,
+                            pitch_semitones=pitch_semitones,
+                            sr=sr,
+                        )
+                        keep = queue_state.should_keep_result(task)
+                        if keep:
+                            queue_state.new_mix = processed
+                        queue_state.mark_completed(task, keep, progress_callback)
+                        continue
+
+                    orig = self.original_stem_data.get(task)
+                    if orig is None:
+                        queue_state.mark_completed(task, False, progress_callback)
+                        continue
+
+                    processed = self._apply_tempo_pitch(
                         data=orig,
                         tempo_rate=tempo_rate,
                         pitch_semitones=pitch_semitones,
                         sr=sr,
                     )
-                    completed += 1
-
-                new_mix = base_mix
-                if include_mix and self.original_mix is not None:
-                    if abort_if_stale():
-                        return
-                    if progress_callback:
-                        progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
-                            total_items,
-                        )
-                    new_mix = self._apply_tempo_pitch(
-                        data=self.original_mix,
-                        tempo_rate=tempo_rate,
-                        pitch_semitones=pitch_semitones,
-                        sr=sr,
-                    )
-                    completed += 1
+                    keep = queue_state.should_keep_result(task)
+                    if keep:
+                        queue_state.new_stems[task] = processed
+                    queue_state.mark_completed(task, keep, progress_callback)
 
                 if abort_if_stale():
                     return
 
-                new_total_samples = self._compute_total_samples(new_stems, new_mix)
-                new_missing = (
-                    set(self.original_stem_data.keys()) - set(new_stems.keys())
-                    if mark_missing
-                    else set()
+                new_total_samples = self._compute_total_samples(
+                    queue_state.new_stems, queue_state.new_mix
                 )
+                new_missing = set()
+                if mark_missing and not queue_state.target_play_all:
+                    new_missing = set(self.original_stem_data.keys()) - set(
+                        queue_state.new_stems.keys()
+                    )
 
                 with self._pending_lock:
                     if generation != self._pending_generation:
                         return
 
-                    self.pending_stem_data = new_stems
-                    self.pending_mix_data = new_mix
+                    self.pending_stem_data = dict(queue_state.new_stems)
+                    self.pending_mix_data = queue_state.new_mix
                     self.pending_tempo_rate = tempo_rate
                     self.pending_pitch_semitones = pitch_semitones
                     self.pending_total_samples = new_total_samples
                     self.pending_missing_stems = new_missing
                     self.pending_ready = True
+                    self._active_render_queue = None
 
                 if log_callback:
                     log_callback("New tempo/pitch configuration ready.")
 
                 if progress_callback:
-                    progress_callback(1.0, "", total_items)
+                    progress_callback(1.0, "", max(queue_state.total_items, 1))
 
             except Exception as e:
                 if log_callback:
                     log_callback(f"Error rebuilding audio for new tempo/pitch: {e}")
+                with self._pending_lock:
+                    if self._pending_generation == generation:
+                        self._active_render_queue = None
 
         with self._pending_lock:
             self._pending_generation += 1
@@ -507,6 +669,18 @@ class AudioSession:
                 self.active_stems
                 if target_active_stems is None
                 else target_active_stems
+            )
+            self._active_render_queue = _RenderQueueState(
+                generation=generation,
+                tempo_rate=tempo_rate,
+                pitch_semitones=pitch_semitones,
+                include_mix=include_mix,
+                base_stems=base_stems,
+                base_mix=base_mix,
+                initial_tasks=stems_to_build
+                | ({_RenderQueueState.MIX_TASK} if include_mix and base_mix is None else set()),
+                target_play_all=self.pending_target_play_all,
+                target_active_stems=self.pending_target_active_stems,
             )
 
         thread = threading.Thread(target=worker, args=(generation,), daemon=True)
@@ -525,6 +699,25 @@ class AudioSession:
             self.pending_pitch_semitones = self.pitch_semitones
             self.pending_target_play_all = self.play_all
             self.pending_target_active_stems = set(self.active_stems)
+            self._active_render_queue = None
+
+    def _update_render_queue_targets(self, log_callback=None, progress_callback=None) -> bool:
+        queue = None
+        with self._pending_lock:
+            queue = self._active_render_queue
+
+        if queue is None:
+            return False
+
+        if log_callback:
+            log_callback("Updating pending render tasks for new stem selection...")
+
+        queue.update_targets(
+            play_all=self.pending_target_play_all,
+            active_stems=self.pending_target_active_stems,
+            progress_callback=progress_callback,
+        )
+        return True
 
     def set_selection(
         self,
@@ -540,6 +733,13 @@ class AudioSession:
         self.play_all = bool(play_all)
         self.active_stems = stems
         self._sync_reverb_states()
+
+        self.pending_target_play_all = self.play_all
+        self.pending_target_active_stems = set(self.active_stems)
+
+        self._update_render_queue_targets(
+            log_callback=log_callback, progress_callback=progress_callback
+        )
 
         self.ensure_selection_ready(
             log_callback=log_callback, progress_callback=progress_callback
