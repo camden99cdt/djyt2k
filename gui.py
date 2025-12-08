@@ -190,23 +190,23 @@ class YTDemucsApp:
 
         right_top = ttk.Frame(right_column)
         right_top.grid(row=0, column=0, sticky="nsew")
-        right_top.columnconfigure(0, weight=1)
-        right_top.columnconfigure(2, weight=0)
+        right_top.columnconfigure(0, weight=0)
+        right_top.columnconfigure(1, weight=0)
+        right_top.columnconfigure(3, weight=1)
         right_top.rowconfigure(0, weight=1)
 
-        sliders_column = ttk.Frame(right_top)
-        sliders_column.grid(row=0, column=0, sticky="nsew")
-        sliders_column.columnconfigure(0, weight=1)
-        sliders_column.rowconfigure(0, weight=1)
-        sliders_column.rowconfigure(1, weight=1)
-        sliders_column.rowconfigure(2, weight=1)
+        effects_column = ttk.Frame(right_top)
+        effects_column.grid(row=0, column=0, sticky="nsew")
+        effects_column.columnconfigure(0, weight=1)
+        effects_column.rowconfigure(0, weight=1)
+        effects_column.rowconfigure(1, weight=1)
 
         self.reverb_enabled_var = tk.BooleanVar(value=False)
         self.reverb_mix_var = tk.DoubleVar(value=0.45)
         self.gain_enabled_var = tk.BooleanVar(value=False)
         self.eq_vars = {band: tk.DoubleVar(value=0.5) for band in ("lo", "mid", "hi")}
 
-        reverb_frame = ttk.Frame(sliders_column)
+        reverb_frame = ttk.Frame(effects_column)
         reverb_frame.grid(row=0, column=0, sticky="ew")
         reverb_frame.rowconfigure(1, weight=1)
         reverb_frame.columnconfigure(0, weight=1)
@@ -233,7 +233,7 @@ class YTDemucsApp:
         )
         self.reverb_mix_slider.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 6))
 
-        gain_frame = ttk.Frame(sliders_column)
+        gain_frame = ttk.Frame(effects_column)
         gain_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         gain_frame.rowconfigure(1, weight=1)
         gain_frame.columnconfigure(0, weight=1)
@@ -265,12 +265,13 @@ class YTDemucsApp:
         self.gain_slider.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(6, 6))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
 
-        eq_frame = ttk.Frame(sliders_column)
-        eq_frame.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
-        eq_frame.columnconfigure(0, weight=1)
-        ttk.Label(eq_frame, text="3-Band EQ").grid(row=0, column=0, sticky="w")
+        eq_column = ttk.Frame(right_top)
+        eq_column.grid(row=0, column=1, sticky="nsw", padx=(10, 0))
+        eq_column.columnconfigure(0, weight=1)
+        eq_column.rowconfigure(1, weight=1)
+        ttk.Label(eq_column, text="3-Band EQ").grid(row=0, column=0, sticky="w")
 
-        eq_sliders = ttk.Frame(eq_frame)
+        eq_sliders = ttk.Frame(eq_column)
         eq_sliders.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
         self.eq_slider_widgets: dict[str, ttk.Scale] = {}
         for idx, band in enumerate(["lo", "mid", "hi"]):
@@ -291,11 +292,11 @@ class YTDemucsApp:
             ttk.Label(eq_sliders, text=band).grid(row=1, column=idx, pady=(6, 0))
 
         ttk.Separator(right_top, orient="vertical").grid(
-            row=0, column=1, sticky="ns", padx=10
+            row=0, column=2, sticky="ns", padx=10
         )
 
         harmonics_frame = ttk.Frame(right_top)
-        harmonics_frame.grid(row=0, column=2, sticky="nsew")
+        harmonics_frame.grid(row=0, column=3, sticky="nsew")
         harmonics_frame.columnconfigure(0, weight=0)
         harmonics_frame.columnconfigure(1, weight=1)
 
@@ -1451,6 +1452,7 @@ class YTDemucsApp:
             self.gain_slider,
             self.reverb_checkbox,
             self.reverb_mix_slider,
+            *self.eq_slider_widgets.values(),
         ]
         self.playback_label_widgets = [
             self.audio_meter_label,
