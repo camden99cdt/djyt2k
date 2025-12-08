@@ -23,7 +23,7 @@ class PlaybackEngine:
         self,
         sample_rate: int,
         pull_callback: Callable[[int], np.ndarray],
-        blocksize: Optional[int] = 1024,
+        blocksize: Optional[int] = 0,
     ):
         self.sample_rate = sample_rate
         self.pull_callback = pull_callback
@@ -36,6 +36,7 @@ class PlaybackEngine:
 
         self.stream = sd.OutputStream(
             samplerate=self.sample_rate,
+            latency='low',
             channels=1,
             callback=self._audio_callback,
             blocksize=self.blocksize,
