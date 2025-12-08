@@ -36,6 +36,7 @@ class YTDemucsApp:
     master_window: "MasterWindow | None" = None
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
+    playback_enabled: bool = False
 
     def __init__(self, root: tk.Tk):
         self.root = root
