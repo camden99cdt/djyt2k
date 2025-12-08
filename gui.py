@@ -516,6 +516,7 @@ class YTDemucsApp:
         self.waveform_points: list[float] = []
         self.waveform_duration: float = 0.0
         self.stem_vars: dict[str, tk.BooleanVar] = {}
+        self.last_stem_selection: set[str] = set()
 
         self.full_mix_path: str | None = None  # path to original yt-dlp wav
         self.current_title: str | None = None
@@ -1467,7 +1468,7 @@ class YTDemucsApp:
 
         # stem checkboxes (only if we actually have stems)
         for idx, stem_name in enumerate(stem_names):
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=False)
             cb = ttk.Checkbutton(
                 self.stems_frame,
                 text=stem_name,
@@ -1477,8 +1478,10 @@ class YTDemucsApp:
             cb.grid(row=0, column=idx + 1, padx=(0, 5))
             self.stem_vars[stem_name] = var
 
+        self.last_stem_selection = set(stem_names)
+
         # "All" checkbox (full mix)
-        self.all_var = tk.BooleanVar(value=(stems_dir is None))
+        self.all_var = tk.BooleanVar(value=True)
         cb_all = ttk.Checkbutton(
             self.stems_frame,
             text="All",
@@ -1636,21 +1639,25 @@ class YTDemucsApp:
         """
         suppress = self.suppress_render_requests
         if self.all_var is not None and self.all_var.get():
+            fallback_stems = set(self.last_stem_selection)
+            if not fallback_stems:
+                fallback_stems = set(self.stem_vars.keys())
             if not suppress:
-                self.player.set_play_all(True)
-                active = set()
-                self.player.set_active_stems(active)
+                self.player.set_selection(True, fallback_stems)
             else:
                 self.player.session.play_all = True
-                self.player.session.active_stems = set()
+                self.player.session.active_stems = set(fallback_stems)
             self.waveform_points = self.player.get_mix_envelope()
         else:
             active = {
                 name for name, var in self.stem_vars.items() if var.get()
             }
+            if active:
+                self.last_stem_selection = set(active)
+            elif self.last_stem_selection:
+                active = set(self.last_stem_selection)
             if not suppress:
-                self.player.set_play_all(False)
-                self.player.set_active_stems(active)
+                self.player.set_selection(False, active)
             else:
                 self.player.session.play_all = False
                 self.player.session.active_stems = set(active)

@@ -130,6 +130,9 @@ class AudioSession:
         # Playback configuration
         self.active_stems: Set[str] = set()
         self.play_all: bool = False  # True -> play full mix only
+        # Track the target selection even while renders are pending.
+        self.pending_target_play_all: bool = False
+        self.pending_target_active_stems: Set[str] = set()
 
     # -------------------------------------------------------------------------
     # LOADING
@@ -191,7 +194,9 @@ class AudioSession:
         self.mix_envelope = self._build_envelope(self.original_mix)
 
         self.active_stems = set(self.original_stem_data.keys())
-        self.play_all = False
+        self.play_all = True
+        self.pending_target_play_all = True
+        self.pending_target_active_stems = set(self.active_stems)
 
         # Pending config is empty
         with self._pending_lock:
@@ -231,6 +236,8 @@ class AudioSession:
         self.mix_envelope = self._build_envelope(self.original_mix)
         self.play_all = True
         self.active_stems = set()
+        self.pending_target_play_all = True
+        self.pending_target_active_stems = set()
 
         # Pending config
         with self._pending_lock:
@@ -260,6 +267,8 @@ class AudioSession:
 
         self.active_stems.clear()
         self.play_all = False
+        self.pending_target_play_all = False
+        self.pending_target_active_stems = set()
 
         self.reverb_states.clear()
         self.reverb_enabled = False
@@ -374,6 +383,8 @@ class AudioSession:
         base_stems: Dict[str, np.ndarray],
         base_mix: Optional[np.ndarray],
         mark_missing: bool,
+        target_play_all: Optional[bool] = None,
+        target_active_stems: Optional[Set[str]] = None,
         log_callback=None,
         progress_callback=None,
     ):
@@ -489,6 +500,14 @@ class AudioSession:
             self.pending_ready = False
             self.pending_tempo_rate = tempo_rate
             self.pending_pitch_semitones = pitch_semitones
+            self.pending_target_play_all = (
+                self.play_all if target_play_all is None else bool(target_play_all)
+            )
+            self.pending_target_active_stems = set(
+                self.active_stems
+                if target_active_stems is None
+                else target_active_stems
+            )
 
         thread = threading.Thread(target=worker, args=(generation,), daemon=True)
         thread.start()
@@ -504,14 +523,43 @@ class AudioSession:
             self.pending_total_samples = 0
             self.pending_tempo_rate = self.tempo_rate
             self.pending_pitch_semitones = self.pitch_semitones
+            self.pending_target_play_all = self.play_all
+            self.pending_target_active_stems = set(self.active_stems)
 
-    def set_active_stems(self, names: Set[str]):
-        self.active_stems = set(names)
+    def set_selection(
+        self,
+        play_all: bool,
+        active_stems: Set[str],
+        log_callback=None,
+        progress_callback=None,
+    ):
+        stems = {name for name in active_stems if name in self.original_stem_data}
+        if not stems and self.original_stem_data:
+            stems = set(self.original_stem_data.keys())
+
+        self.play_all = bool(play_all)
+        self.active_stems = stems
         self._sync_reverb_states()
 
-    def set_play_all(self, value: bool):
-        self.play_all = bool(value)
-        self._sync_reverb_states()
+        self.ensure_selection_ready(
+            log_callback=log_callback, progress_callback=progress_callback
+        )
+
+    def set_active_stems(self, names: Set[str], log_callback=None, progress_callback=None):
+        self.set_selection(
+            play_all=False,
+            active_stems=set(names),
+            log_callback=log_callback,
+            progress_callback=progress_callback,
+        )
+
+    def set_play_all(self, value: bool, log_callback=None, progress_callback=None):
+        self.set_selection(
+            play_all=bool(value),
+            active_stems=set(self.active_stems),
+            log_callback=log_callback,
+            progress_callback=progress_callback,
+        )
 
     def set_reverb_enabled(self, enabled: bool):
         self.reverb_enabled = bool(enabled)
@@ -587,6 +635,13 @@ class AudioSession:
                 name for name in target_stems if name in self.original_stem_data
             }
 
+        # When the "All" mix is active, only rebuild the mix—even if active_stems
+        # was populated earlier for fallback purposes. Rendering stems in this
+        # mode is unnecessary and caused extra background work when changing
+        # tempo/pitch while "All" was selected.
+        if include_mix and self.play_all:
+            stems_to_process.clear()
+
         self._queue_build(
             tempo_rate=new_tempo_rate,
             pitch_semitones=new_pitch_semitones,
@@ -595,6 +650,8 @@ class AudioSession:
             base_stems={},
             base_mix=None,
             mark_missing=True,
+            target_play_all=self.play_all,
+            target_active_stems=set(self.active_stems),
             log_callback=log_callback,
             progress_callback=progress_callback,
         )
@@ -632,6 +689,8 @@ class AudioSession:
             base_stems=dict(self.current_stem_data),
             base_mix=self.current_mix_data,
             mark_missing=True,
+            target_play_all=self.play_all,
+            target_active_stems=set(self.active_stems),
             log_callback=log_callback,
             progress_callback=progress_callback,
         )
@@ -665,6 +724,8 @@ class AudioSession:
             self.pitch_semitones = self.pending_pitch_semitones
             self.total_samples = new_total_samples
             self.current_missing_stems = set(self.pending_missing_stems)
+            self.play_all = self.pending_target_play_all
+            self.active_stems = set(self.pending_target_active_stems)
 
             # Clear pending
             self.pending_stem_data = {}
@@ -672,6 +733,8 @@ class AudioSession:
             self.pending_missing_stems = set()
             self.pending_total_samples = 0
             self.pending_ready = False
+
+        self._sync_reverb_states()
 
         # Compute new play index based on FRACTION through the old track
         if old_total_samples <= 0 or new_total_samples <= 0:
@@ -737,12 +800,15 @@ class AudioSession:
 
         self._sync_reverb_states()
 
+        played_any = False
+
         if self.play_all and self.current_mix_data is not None:
             segment = self.current_mix_data[start:start + frames]
             if segment.size > 0:
                 dry_mix[:segment.size] += segment
                 if wet_mix is not None:
                     wet_mix[:segment.size] += self._get_reverb("__mix__").process(segment)
+                played_any = segment.size > 0
         else:
             for name in list(self.active_stems):
                 data = self.current_stem_data.get(name)
@@ -754,6 +820,14 @@ class AudioSession:
                 dry_mix[:segment.size] += segment
                 if wet_mix is not None:
                     wet_mix[:segment.size] += self._get_reverb(name).process(segment)
+                played_any = True
+
+        if (not played_any) and self.current_mix_data is not None:
+            segment = self.current_mix_data[start:start + frames]
+            if segment.size > 0:
+                dry_mix[:segment.size] += segment
+                if wet_mix is not None:
+                    wet_mix[:segment.size] += self._get_reverb("__mix__").process(segment)
 
         if wet_mix is not None:
             mixed = dry_mix * (1.0 - wet_amount) + wet_mix * wet_amount
