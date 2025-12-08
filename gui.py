@@ -1498,7 +1498,7 @@ class YTDemucsApp:
         # stem checkboxes (only if we actually have stems)
         for idx, stem_name in enumerate(stem_names):
             var = tk.IntVar(value=0)
-            cb = ttk.Checkbutton(
+            cb = tk.Checkbutton(
                 self.stems_frame,
                 text=stem_name,
                 variable=var,
