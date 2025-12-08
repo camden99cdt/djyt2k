@@ -86,6 +86,7 @@ class YTDemucsApp:
             self.style.configure(
                 style_name,
                 padding=(3, 10),
+                borderwidth=1,
                 background=color,
                 bordercolor=lighter_border,
                 darkcolor=color,
@@ -93,7 +94,7 @@ class YTDemucsApp:
             )
             self.style.map(
                 style_name,
-                relief=[("pressed", "sunken"), ("selected", "sunken"), ("!selected", "flat")],
+                relief=[("pressed", "sunken"), ("selected", "sunken"), ("!selected", "raised")],
                 background=[
                     (("active", "selected"), lighter_fill),
                     (("active", "!selected"), hover_default_fill),
