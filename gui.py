@@ -267,10 +267,15 @@ class YTDemucsApp:
             row=0, column=1, sticky="ns", padx=10
         )
 
-        harmonics_frame = ttk.Frame(right_top)
-        harmonics_frame.grid(row=0, column=2, sticky="nsew")
-        harmonics_frame.columnconfigure(0, weight=0)
-        harmonics_frame.columnconfigure(1, weight=1)
+        self.sidebar_frame = ttk.Frame(right_top)
+        self.sidebar_frame.grid(row=0, column=2, sticky="nsew")
+        self.sidebar_frame.columnconfigure(0, weight=1)
+        self.sidebar_frame.rowconfigure(0, weight=1)
+
+        self.harmonics_frame = ttk.Frame(self.sidebar_frame)
+        self.harmonics_frame.grid(row=0, column=0, sticky="nsew")
+        self.harmonics_frame.columnconfigure(0, weight=0)
+        self.harmonics_frame.columnconfigure(1, weight=1)
 
         self.key_table_headers: list[ttk.Label] = []
         self.key_table_value_labels: dict[str, ttk.Label] = {}
@@ -285,15 +290,90 @@ class YTDemucsApp:
         ]
 
         for idx, (title, value_key) in enumerate(harmonics_rows):
-            header = ttk.Label(harmonics_frame, text=title, anchor="w")
+            header = ttk.Label(self.harmonics_frame, text=title, anchor="w")
             header.grid(row=idx, column=0, sticky="w", pady=(0, 4))
             self.key_table_headers.append(header)
 
             value_lbl = ttk.Label(
-                harmonics_frame, text="N/A", anchor="e", justify="right", width=8
+                self.harmonics_frame, text="N/A", anchor="e", justify="right", width=8
             )
             value_lbl.grid(row=idx, column=1, sticky="e", pady=(0, 4), padx=(10, 0))
             self.key_table_value_labels[value_key] = value_lbl
+
+        self.loop_tools_frame = ttk.Frame(self.sidebar_frame)
+        self.loop_tools_frame.grid(row=0, column=0, sticky="nsew")
+        self.loop_tools_frame.columnconfigure(0, weight=1)
+        self.loop_tools_frame.rowconfigure(5, weight=1)
+
+        loop_title = ttk.Label(self.loop_tools_frame, text="Loop", anchor="center")
+        loop_title.grid(row=0, column=0, pady=(0, 6))
+        self.loop_title_label = loop_title
+
+        self.play_from_loop_var = tk.BooleanVar(value=False)
+        self.play_from_loop_checkbox = ttk.Checkbutton(
+            self.loop_tools_frame,
+            text="Play from Loop",
+            variable=self.play_from_loop_var,
+        )
+        self.play_from_loop_checkbox.grid(row=1, column=0, sticky="w", pady=(0, 8))
+
+        self.loop_start_buttons = ttk.Frame(self.loop_tools_frame)
+        self.loop_start_buttons.grid(row=2, column=0, pady=(0, 2))
+        self.loop_start_buttons.columnconfigure(0, weight=1)
+        self.loop_start_buttons.columnconfigure(1, weight=1)
+
+        self.loop_start_back_btn = tk.Button(
+            self.loop_start_buttons,
+            text="<",
+            bg="#c8f5d4",
+            activebackground="#b3eac4",
+            command=lambda: self.nudge_loop_start(-0.2),
+        )
+        self.loop_start_back_btn.grid(row=0, column=0, padx=(0, 4))
+
+        self.loop_start_forward_btn = tk.Button(
+            self.loop_start_buttons,
+            text=">",
+            bg="#c8f5d4",
+            activebackground="#b3eac4",
+            command=lambda: self.nudge_loop_start(0.2),
+        )
+        self.loop_start_forward_btn.grid(row=0, column=1, padx=(4, 0))
+
+        self.loop_start_value_label = ttk.Label(
+            self.loop_tools_frame, text="00:00:000", foreground="#00a04a"
+        )
+        self.loop_start_value_label.grid(row=3, column=0, pady=(2, 8))
+
+        self.loop_end_buttons = ttk.Frame(self.loop_tools_frame)
+        self.loop_end_buttons.grid(row=4, column=0, pady=(0, 2))
+        self.loop_end_buttons.columnconfigure(0, weight=1)
+        self.loop_end_buttons.columnconfigure(1, weight=1)
+
+        self.loop_end_back_btn = tk.Button(
+            self.loop_end_buttons,
+            text="<",
+            bg="#f5c8c8",
+            activebackground="#eab3b3",
+            command=lambda: self.nudge_loop_end(-0.2),
+        )
+        self.loop_end_back_btn.grid(row=0, column=0, padx=(0, 4))
+
+        self.loop_end_forward_btn = tk.Button(
+            self.loop_end_buttons,
+            text=">",
+            bg="#f5c8c8",
+            activebackground="#eab3b3",
+            command=lambda: self.nudge_loop_end(0.2),
+        )
+        self.loop_end_forward_btn.grid(row=0, column=1, padx=(4, 0))
+
+        self.loop_end_value_label = ttk.Label(
+            self.loop_tools_frame, text="00:00:000", foreground="#c00000"
+        )
+        self.loop_end_value_label.grid(row=5, column=0, pady=(2, 0))
+
+        self.loop_tools_frame.grid_remove()
 
         self.playback_control_widgets.extend(
             [
@@ -302,6 +382,11 @@ class YTDemucsApp:
                 self.gain_slider,
                 self.reverb_checkbox,
                 self.reverb_mix_slider,
+                self.play_from_loop_checkbox,
+                self.loop_start_back_btn,
+                self.loop_start_forward_btn,
+                self.loop_end_back_btn,
+                self.loop_end_forward_btn,
             ]
         )
         self.playback_label_widgets.extend(
@@ -310,6 +395,9 @@ class YTDemucsApp:
                 self.gain_label,
                 self.thumbnail_label,
                 self.reverb_mix_label,
+                self.loop_title_label,
+                self.loop_start_value_label,
+                self.loop_end_value_label,
             ]
         )
         self.playback_label_widgets.extend(self.key_table_headers)
@@ -550,6 +638,8 @@ class YTDemucsApp:
             self.append_log(f"Audio engine not available: {self.player.error_message}")
         else:
             self.player.set_render_progress_callback(self.on_render_progress)
+
+        self.show_loop_tools(False)
 
         # pipeline orchestration
         self.pipeline_runner = PipelineRunner(
@@ -1423,12 +1513,20 @@ class YTDemucsApp:
             self.gain_slider,
             self.reverb_checkbox,
             self.reverb_mix_slider,
+            self.play_from_loop_checkbox,
+            self.loop_start_back_btn,
+            self.loop_start_forward_btn,
+            self.loop_end_back_btn,
+            self.loop_end_forward_btn,
         ]
         self.playback_label_widgets = [
             self.audio_meter_label,
             self.gain_label,
             self.thumbnail_label,
             self.reverb_mix_label,
+            self.loop_title_label,
+            self.loop_start_value_label,
+            self.loop_end_value_label,
         ]
         self.playback_label_widgets.extend(self.key_table_headers)
         self.playback_label_widgets.extend(self.key_table_value_labels.values())
@@ -1455,6 +1553,8 @@ class YTDemucsApp:
             return
 
         self.waveform_duration = self.player.get_duration()
+        if self.play_from_loop_var is not None:
+            self.play_from_loop_var.set(False)
 
         self.set_playback_controls_state(True)
 
@@ -1744,6 +1844,26 @@ class YTDemucsApp:
             tags="loop_marker",
         )
 
+        self.update_loop_position_labels(start_sec, end_sec)
+
+    def update_loop_position_labels(
+        self, start_sec: float | None = None, end_sec: float | None = None
+    ):
+        if (
+            self.loop_start_value_label is None
+            or self.loop_end_value_label is None
+            or not self.player.audio_ok
+        ):
+            return
+
+        if start_sec is None or end_sec is None:
+            start_sec, end_sec = self.player.get_loop_bounds_seconds()
+
+        self.loop_start_value_label.config(
+            text=self.format_time_millis(max(0.0, start_sec))
+        )
+        self.loop_end_value_label.config(text=self.format_time_millis(max(0.0, end_sec)))
+
     def draw_cursor(self):
         if self.wave_canvas is None or self.waveform_duration <= 0:
             return
@@ -1802,6 +1922,32 @@ class YTDemucsApp:
         if self.play_pause_button is not None:
             self.play_pause_button.config(text="Pause")
 
+    def nudge_loop_start(self, delta_seconds: float):
+        if self.waveform_duration <= 0:
+            return
+
+        start_sec, end_sec = self.player.get_loop_bounds_seconds()
+        new_start = start_sec + delta_seconds
+        new_start = max(0.0, min(new_start, end_sec - 0.01))
+
+        if self.player.set_loop_start(new_start):
+            self.draw_waveform()
+        else:
+            self.update_loop_position_labels()
+
+    def nudge_loop_end(self, delta_seconds: float):
+        if self.waveform_duration <= 0:
+            return
+
+        start_sec, end_sec = self.player.get_loop_bounds_seconds()
+        new_end = end_sec + delta_seconds
+        new_end = min(self.waveform_duration, max(new_end, start_sec + 0.01))
+
+        if self.player.set_loop_end(new_end):
+            self.draw_waveform()
+        else:
+            self.update_loop_position_labels()
+
     # ---------- transport ----------
 
     def on_play_pause(self):
@@ -1832,6 +1978,19 @@ class YTDemucsApp:
     def start_playback(self) -> bool:
         if not self.player.audio_ok or self.full_mix_path is None:
             return False
+        starting_from_stop = not self.player.is_playing and not self.player.is_paused
+
+        if (
+            starting_from_stop
+            and self.play_from_loop_var is not None
+            and self.play_from_loop_var.get()
+            and self.player.loop_controller.enabled
+        ):
+            loop_start, _ = self.player.get_loop_bounds_seconds()
+            self.player.seek(loop_start)
+            self.update_play_pause_button()
+            return True
+
         self.player.play()
         self.update_play_pause_button()
         return True
@@ -1860,6 +2019,19 @@ class YTDemucsApp:
             self.loop_button.config(text="Linear")
         else:
             self.loop_button.config(text="Loop")
+        self.show_loop_tools(self.player.loop_controller.enabled)
+
+    def show_loop_tools(self, show_loop_tools: bool):
+        if self.loop_tools_frame is None or self.harmonics_frame is None:
+            return
+
+        if show_loop_tools:
+            self.harmonics_frame.grid_remove()
+            self.loop_tools_frame.grid()
+            self.update_loop_position_labels()
+        else:
+            self.loop_tools_frame.grid_remove()
+            self.harmonics_frame.grid()
 
     def get_playback_state(self) -> str:
         if not self.player.is_playing:
@@ -1959,6 +2131,8 @@ class YTDemucsApp:
         self.player.set_loop_enabled(False)
         self.player.reset_loop_points()
         self.update_loop_button()
+        self.update_loop_position_labels()
+        self.draw_waveform()
 
         # sliders
         if self.volume_var is not None:
@@ -2594,6 +2768,15 @@ class YTDemucsApp:
         seconds = int(seconds)
         m, s = divmod(seconds, 60)
         return f"{m:02d}:{s:02d}"
+
+    @staticmethod
+    def format_time_millis(seconds: float) -> str:
+        seconds = max(0.0, seconds)
+        whole_seconds = int(seconds)
+        m, s = divmod(whole_seconds, 60)
+        millis = int(round((seconds - whole_seconds) * 1000))
+        millis = min(millis, 999)
+        return f"{m:02d}:{s:02d}:{millis:03d}"
 
     def format_pitch_label(self, semitones: float) -> str:
         """
