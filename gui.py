@@ -1975,8 +1975,8 @@ class YTDemucsApp:
             self.reverb_mix_label.config(text="45% wet")
 
         # audio engine
+        self.player.reset_to_original_mix()
         self.player.set_master_volume(1.0)
-        self.player.set_tempo_and_pitch(1.0, 0.0)
         self.player.set_gain_db(0.0)
         self.player.set_reverb_enabled(False)
         self.player.set_reverb_wet(0.45)
