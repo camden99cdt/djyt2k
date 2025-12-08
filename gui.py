@@ -37,6 +37,21 @@ class YTDemucsApp:
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
 
+    @staticmethod
+    def _lighten_color(color: str, factor: float) -> str:
+        """Return a lighter hex color by blending toward white."""
+
+        color = color.lstrip("#")
+        if len(color) != 6:
+            return color
+        r = int(color[0:2], 16)
+        g = int(color[2:4], 16)
+        b = int(color[4:6], 16)
+        r = min(255, int(r + (255 - r) * factor))
+        g = min(255, int(g + (255 - g) * factor))
+        b = min(255, int(b + (255 - b) * factor))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.base_title = "YouTube \u2192 Demucs Stems"
@@ -49,6 +64,52 @@ class YTDemucsApp:
         self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
         self.setup_meter_styles()
+        default_tool_background = (
+            self.style.lookup("Toolbutton", "background")
+            or self.style.lookup("TButton", "background")
+            or "#f0f0f0"
+        )
+        default_tool_border = (
+            self.style.lookup("Toolbutton", "bordercolor")
+            or self.style.lookup("TButton", "bordercolor")
+            or "#b5b5b5"
+        )
+        for style_name, color in [
+            ("HighBandToggle.Toolbutton", "#ffd447"),
+            ("MidBandToggle.Toolbutton", "#7ed957"),
+            ("LowBandToggle.Toolbutton", "#5aa9ff"),
+        ]:
+            lighter_fill = self._lighten_color(color, 0.18)
+            lighter_border = self._lighten_color(color, 0.22)
+            hover_default_fill = self._lighten_color(default_tool_background, 0.12)
+            self.style.layout(style_name, self.style.layout("Toolbutton"))
+            self.style.configure(
+                style_name,
+                padding=(3, 10),
+                borderwidth=1,
+                background=color,
+                bordercolor=lighter_border,
+                darkcolor=color,
+                lightcolor=lighter_border,
+            )
+            self.style.map(
+                style_name,
+                relief=[("pressed", "sunken"), ("selected", "sunken"), ("!selected", "raised")],
+                background=[
+                    (("active", "selected"), lighter_fill),
+                    (("active", "!selected"), hover_default_fill),
+                    (("selected",), color),
+                    (("!selected",), default_tool_background),
+                ],
+                bordercolor=[
+                    (("active", "selected"), color),
+                    (("active", "!selected"), default_tool_border),
+                    (("selected",), lighter_border),
+                    (("!selected",), color),
+                ],
+                darkcolor=[(("selected",), color), (("!selected",), color)],
+                lightcolor=[(("selected",), lighter_border), (("!selected",), color)],
+            )
         self.render_label_width_chars = 32
         self.style.configure(
             "RenderProgress.TLabel",
@@ -139,6 +200,10 @@ class YTDemucsApp:
         left_column.rowconfigure(0, weight=0)
         left_column.rowconfigure(1, weight=1)
 
+        self.high_band_var = tk.BooleanVar(value=True)
+        self.mid_band_var = tk.BooleanVar(value=True)
+        self.low_band_var = tk.BooleanVar(value=True)
+
         self.thumbnail_label = ttk.Label(
             left_column,
             text="No\nthumbnail",
@@ -149,11 +214,51 @@ class YTDemucsApp:
 
         meters_stack = ttk.Frame(left_column)
         meters_stack.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
-        meters_stack.columnconfigure(0, weight=1)
+        meters_stack.columnconfigure(0, weight=0)
         meters_stack.columnconfigure(1, weight=1)
+        meters_stack.columnconfigure(2, weight=1)
         meters_stack.rowconfigure(0, weight=1)
+
+        filter_column = ttk.Frame(meters_stack)
+        filter_column.grid(row=0, column=0, sticky="ns", padx=(0, 6))
+        filter_column.columnconfigure(0, weight=1)
+        for r in range(3):
+            filter_column.rowconfigure(r, weight=1)
+
+        self.high_band_button = ttk.Checkbutton(
+            filter_column,
+            variable=self.high_band_var,
+            command=self.on_frequency_band_toggle,
+            style="HighBandToggle.Toolbutton",
+            text="",
+            width=1,
+        )
+        self.high_band_button.grid(row=0, column=0, sticky="nsew", ipady=10)
+
+        self.mid_band_button = ttk.Checkbutton(
+            filter_column,
+            variable=self.mid_band_var,
+            command=self.on_frequency_band_toggle,
+            style="MidBandToggle.Toolbutton",
+            text="",
+            width=1,
+        )
+        self.mid_band_button.grid(row=1, column=0, sticky="nsew", ipady=10)
+
+        self.low_band_button = ttk.Checkbutton(
+            filter_column,
+            variable=self.low_band_var,
+            command=self.on_frequency_band_toggle,
+            style="LowBandToggle.Toolbutton",
+            text="",
+            width=1,
+        )
+        self.low_band_button.grid(row=2, column=0, sticky="nsew", ipady=10)
+
+        ttk.Label(filter_column, text="Cut").grid(row=3, column=0, pady=(4, 0))
+
         meter_column = ttk.Frame(meters_stack)
-        meter_column.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        meter_column.grid(row=0, column=1, sticky="nsew", padx=(0, 6))
         meter_column.columnconfigure(0, weight=1)
         meter_column.rowconfigure(0, weight=1)
 
@@ -177,7 +282,7 @@ class YTDemucsApp:
         self.audio_meter_label.grid(row=1, column=0, pady=(6, 0))
 
         self.volume_container = ttk.Frame(meters_stack)
-        self.volume_container.grid(row=0, column=1, sticky="nsew", rowspan=2)
+        self.volume_container.grid(row=0, column=2, sticky="nsew", rowspan=2)
         self.volume_container.columnconfigure(0, weight=1)
         self.volume_container.rowconfigure(0, weight=1)
         self.volume_container.columnconfigure(2, weight=1)
@@ -429,6 +534,9 @@ class YTDemucsApp:
 
         self.playback_control_widgets.extend(
             [
+                self.high_band_button,
+                self.mid_band_button,
+                self.low_band_button,
                 self.audio_meter,
                 self.gain_checkbox,
                 self.gain_slider,
@@ -1565,6 +1673,9 @@ class YTDemucsApp:
         self.render_progress_label = None
         self.render_total_tasks = None
         self.playback_control_widgets = [
+            self.high_band_button,
+            self.mid_band_button,
+            self.low_band_button,
             self.audio_meter,
             self.gain_checkbox,
             self.gain_slider,
@@ -1625,6 +1736,7 @@ class YTDemucsApp:
         self.player.set_loop_crossfade_enabled(False)
 
         self.set_playback_controls_state(True)
+        self.reset_frequency_band_controls()
 
         # master volume (left column, vertical)
         self.volume_label = ttk.Label(self.volume_container, width=10, anchor="center", text="100%")
@@ -2228,6 +2340,7 @@ class YTDemucsApp:
         self.audio_meter_label.config(text="-∞ dB")
         self.player.set_gain_db(0.0)
         self.player.set_gain_enabled(False)
+        self.reset_frequency_band_controls()
         self.set_playback_controls_state(False)
         self.update_key_table()
         self.update_save_button_state()
@@ -2265,6 +2378,7 @@ class YTDemucsApp:
             self.reverb_enabled_var.set(False)
         if self.reverb_mix_var is not None:
             self.reverb_mix_var.set(0.45)
+        self.reset_frequency_band_controls()
 
         # stem selection — always revert to the All mix at default speed/pitch
         if self.all_var is not None:
@@ -2293,6 +2407,7 @@ class YTDemucsApp:
         self.player.set_gain_enabled(False)
         self.player.set_reverb_enabled(False)
         self.player.set_reverb_wet(0.45)
+        self.player.set_frequency_bands(True, True, True)
         self.update_reverb_controls_state()
 
         self.update_key_table(0.0)
@@ -2525,6 +2640,25 @@ class YTDemucsApp:
     def on_gain_toggle(self):
         enabled = bool(self.gain_enabled_var.get()) if self.gain_enabled_var else False
         self.player.set_gain_enabled(enabled)
+
+    def on_frequency_band_toggle(self):
+        low = bool(self.low_band_var.get()) if self.low_band_var else True
+        mid = bool(self.mid_band_var.get()) if self.mid_band_var else True
+        high = bool(self.high_band_var.get()) if self.high_band_var else True
+
+        if getattr(self, "player", None) is not None:
+            self.player.set_frequency_bands(low=low, mid=mid, high=high)
+
+    def reset_frequency_band_controls(self):
+        if self.high_band_var is not None:
+            self.high_band_var.set(True)
+        if self.mid_band_var is not None:
+            self.mid_band_var.set(True)
+        if self.low_band_var is not None:
+            self.low_band_var.set(True)
+
+        if getattr(self, "player", None) is not None:
+            self.player.set_frequency_bands(True, True, True)
 
     def on_reverb_toggle(self):
         enabled = bool(self.reverb_enabled_var.get()) if self.reverb_enabled_var else False

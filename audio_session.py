@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple, Set, Optional
 import numpy as np
 import soundfile as sf
 import librosa
+from scipy.signal import butter, sosfilt, sosfilt_zi
 
 
 class SimpleReverb:
@@ -91,6 +92,9 @@ class AudioSession:
       2) Read from current_* only (no librosa, no heavy work)
     """
 
+    LOW_CROSSOVER_HZ = 200.0
+    HIGH_CROSSOVER_HZ = 2000.0
+
     def __init__(self):
         # sample rate
         self.sample_rate: Optional[int] = None
@@ -111,6 +115,23 @@ class AudioSession:
         self.reverb_enabled: bool = False
         self.reverb_wet: float = 0.45
         self.reverb_states: Dict[str, "SimpleReverb"] = {}
+
+        # Frequency filtering
+        self.frequency_bands_enabled: Dict[str, bool] = {
+            "low": True,
+            "mid": True,
+            "high": True,
+        }
+        self._frequency_filters: Dict[str, np.ndarray] = {}
+        self._frequency_filter_states: Dict[str, np.ndarray] = {}
+        self._frequency_filter_lock = threading.Lock()
+        self._frequency_band_gain: Dict[str, float] = {"low": 1.0, "mid": 1.0, "high": 1.0}
+        self._frequency_band_gain_target: Dict[str, float] = {
+            "low": 1.0,
+            "mid": 1.0,
+            "high": 1.0,
+        }
+        self._frequency_gain_ramp_samples = 1024
 
         # PENDING config (being built in the background for a new tempo/pitch)
         self.pending_stem_data: Dict[str, np.ndarray] = {}
@@ -198,6 +219,8 @@ class AudioSession:
         self.pending_target_play_all = True
         self.pending_target_active_stems = set(self.active_stems)
 
+        self._build_frequency_filters()
+
         # Pending config is empty
         with self._pending_lock:
             self.pending_stem_data = {}
@@ -239,6 +262,8 @@ class AudioSession:
         self.pending_target_play_all = True
         self.pending_target_active_stems = set()
 
+        self._build_frequency_filters()
+
         # Pending config
         with self._pending_lock:
             self.pending_stem_data = {}
@@ -273,6 +298,14 @@ class AudioSession:
         self.reverb_states.clear()
         self.reverb_enabled = False
         self.reverb_wet = 0.45
+
+        with self._frequency_filter_lock:
+            self.frequency_bands_enabled = {"low": True, "mid": True, "high": True}
+            self._frequency_filters = {}
+            self._frequency_filter_states = {}
+            self._frequency_band_gain = {"low": 1.0, "mid": 1.0, "high": 1.0}
+            self._frequency_band_gain_target = {"low": 1.0, "mid": 1.0, "high": 1.0}
+            self._frequency_gain_ramp_samples = 1024
 
         with self._pending_lock:
             self.pending_stem_data = {}
@@ -654,6 +687,111 @@ class AudioSession:
             self.reverb_states[name] = SimpleReverb(self.sample_rate)
         return self.reverb_states[name]
 
+    # -------------------------------------------------------------------------
+    # FREQUENCY FILTERING
+    # -------------------------------------------------------------------------
+
+    def _build_frequency_filters(self):
+        if self.sample_rate is None:
+            return
+
+        nyquist = max(1.0, self.sample_rate / 2.0)
+        low_norm = min(max(self.LOW_CROSSOVER_HZ / nyquist, 1e-4), 0.99)
+        high_norm = min(max(self.HIGH_CROSSOVER_HZ / nyquist, low_norm + 1e-4), 0.99)
+
+        self._frequency_gain_ramp_samples = max(1, int(0.01 * self.sample_rate))
+
+        if high_norm <= low_norm:
+            high_norm = min(0.99, low_norm + 0.05)
+            low_norm = max(1e-4, high_norm - 0.05)
+
+        filters = {
+            "low": butter(4, low_norm, btype="lowpass", output="sos"),
+            "mid": butter(4, [low_norm, high_norm], btype="bandpass", output="sos"),
+            "high": butter(4, high_norm, btype="highpass", output="sos"),
+        }
+
+        with self._frequency_filter_lock:
+            self._frequency_filters = filters
+            self._reset_filter_state_locked()
+
+    def _reset_filter_state_locked(self):
+        self._frequency_filter_states = {
+            name: sosfilt_zi(sos).astype("float32")
+            for name, sos in self._frequency_filters.items()
+        }
+
+    def set_frequency_bands(self, low: bool, mid: bool, high: bool):
+        with self._frequency_filter_lock:
+            self.frequency_bands_enabled = {
+                "low": bool(low),
+                "mid": bool(mid),
+                "high": bool(high),
+            }
+            self._frequency_band_gain_target = {
+                "low": 1.0 if low else 0.0,
+                "mid": 1.0 if mid else 0.0,
+                "high": 1.0 if high else 0.0,
+            }
+
+    def _apply_frequency_filters(self, chunk: np.ndarray) -> np.ndarray:
+        if chunk.size == 0:
+            return chunk
+
+        if all(self.frequency_bands_enabled.values()):
+            return chunk
+
+        if self.sample_rate is None:
+            return chunk
+
+        if not self._frequency_filters:
+            self._build_frequency_filters()
+
+        output = np.zeros_like(chunk, dtype="float32")
+
+        with self._frequency_filter_lock:
+            if self._frequency_filters and not self._frequency_filter_states:
+                self._reset_filter_state_locked()
+
+            chunk_len = chunk.shape[0]
+            ramp_samples = max(1, int(self._frequency_gain_ramp_samples))
+
+            for band in ("low", "mid", "high"):
+                sos = self._frequency_filters.get(band)
+                if sos is None:
+                    continue
+
+                filtered, self._frequency_filter_states[band] = sosfilt(
+                    sos, chunk, zi=self._frequency_filter_states[band]
+                )
+
+                current_gain = float(self._frequency_band_gain.get(band, 1.0))
+                target_gain = float(self._frequency_band_gain_target.get(band, 1.0))
+
+                if current_gain != target_gain:
+                    step = min(1.0, chunk_len / float(ramp_samples))
+                    next_gain = current_gain + (target_gain - current_gain) * step
+                    ramp = np.linspace(
+                        current_gain,
+                        next_gain,
+                        num=chunk_len,
+                        endpoint=True,
+                        dtype="float32",
+                    )
+                    band_output = (
+                        filtered.astype("float32") * ramp
+                        if filtered.ndim == 1
+                        else filtered.astype("float32") * ramp[:, None]
+                    )
+                    self._frequency_band_gain[band] = next_gain
+                else:
+                    band_output = filtered.astype("float32") * target_gain
+
+                output += band_output
+
+        np.clip(output, -1.0, 1.0, out=output)
+        return output
+
     def request_tempo_pitch_change(
         self,
         new_tempo_rate: float,
@@ -899,9 +1037,9 @@ class AudioSession:
         if wet_mix is not None:
             mixed = dry_mix * (1.0 - wet_amount) + wet_mix * wet_amount
             np.clip(mixed, -1.0, 1.0, out=mixed)
-            return mixed
+            return self._apply_frequency_filters(mixed)
 
-        return dry_mix
+        return self._apply_frequency_filters(dry_mix)
 
     # -------------------------------------------------------------------------
     # DURATION
