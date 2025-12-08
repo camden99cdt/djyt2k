@@ -591,7 +591,7 @@ class AudioSession:
         active_stems: Set[str],
         log_callback=None,
         progress_callback=None,
-    ):
+    ) -> bool:
         stems = {name for name in active_stems if name in self.original_stem_data}
         if not stems and self.original_stem_data:
             stems = set(self.original_stem_data.keys())
@@ -600,20 +600,22 @@ class AudioSession:
         self.active_stems = stems
         self._sync_reverb_states()
 
-        self.ensure_selection_ready(
+        return self.ensure_selection_ready(
             log_callback=log_callback, progress_callback=progress_callback
         )
 
-    def set_active_stems(self, names: Set[str], log_callback=None, progress_callback=None):
-        self.set_selection(
+    def set_active_stems(
+        self, names: Set[str], log_callback=None, progress_callback=None
+    ) -> bool:
+        return self.set_selection(
             play_all=False,
             active_stems=set(names),
             log_callback=log_callback,
             progress_callback=progress_callback,
         )
 
-    def set_play_all(self, value: bool, log_callback=None, progress_callback=None):
-        self.set_selection(
+    def set_play_all(self, value: bool, log_callback=None, progress_callback=None) -> bool:
+        return self.set_selection(
             play_all=bool(value),
             active_stems=set(self.active_stems),
             log_callback=log_callback,
@@ -719,14 +721,14 @@ class AudioSession:
             progress_callback=progress_callback,
         )
 
-    def ensure_selection_ready(self, log_callback=None, progress_callback=None):
+    def ensure_selection_ready(self, log_callback=None, progress_callback=None) -> bool:
         """
         Ensure the currently selected playback source (mix or active stems)
         has buffers rendered for the *current* tempo/pitch. Missing stems/mix
         are rendered asynchronously and swapped in when ready.
         """
         if self.sample_rate is None:
-            return
+            return False
 
         required_stems: Set[str] = set()
         include_mix = False
@@ -742,7 +744,7 @@ class AudioSession:
         mix_missing = include_mix and self.current_mix_data is None
 
         if not missing_stems and not mix_missing:
-            return
+            return False
 
         self._queue_build(
             tempo_rate=self.tempo_rate,
@@ -757,6 +759,8 @@ class AudioSession:
             log_callback=log_callback,
             progress_callback=progress_callback,
         )
+
+        return True
 
     def maybe_swap_pending(self, current_position_seconds: float) -> Optional[int]:
         """

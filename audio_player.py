@@ -106,20 +106,29 @@ class StemAudioPlayer:
     def get_mix_envelope(self) -> List[float]:
         return self.session.get_mix_envelope()
 
-    def set_selection(self, play_all: bool, stems: Set[str]):
-        self.session.set_selection(
+    def set_selection(
+        self,
+        play_all: bool,
+        stems: Set[str],
+        progress_callback=None,
+    ) -> bool:
+        return self.session.set_selection(
             play_all=play_all,
             active_stems=stems,
             log_callback=getattr(self, "log_callback", None),
-            progress_callback=self.render_progress_callback,
+            progress_callback=progress_callback,
         )
 
-    def set_active_stems(self, names: Set[str]):
-        self.set_selection(play_all=False, stems=set(names))
+    def set_active_stems(self, names: Set[str], progress_callback=None) -> bool:
+        return self.set_selection(
+            play_all=False, stems=set(names), progress_callback=progress_callback
+        )
 
-    def set_play_all(self, value: bool):
+    def set_play_all(self, value: bool, progress_callback=None) -> bool:
         fallback_stems = set(self.session.active_stems)
-        self.set_selection(play_all=value, stems=fallback_stems)
+        return self.set_selection(
+            play_all=value, stems=fallback_stems, progress_callback=progress_callback
+        )
 
     # ---------- tempo & pitch & volume ----------
 
