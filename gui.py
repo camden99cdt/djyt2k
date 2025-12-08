@@ -190,9 +190,9 @@ class YTDemucsApp:
 
         right_top = ttk.Frame(right_column)
         right_top.grid(row=0, column=0, sticky="nsew")
-        right_top.columnconfigure(0, weight=0)
+        right_top.columnconfigure(0, weight=1)
         right_top.columnconfigure(1, weight=0)
-        right_top.columnconfigure(3, weight=1)
+        right_top.columnconfigure(3, weight=0)
         right_top.rowconfigure(0, weight=1)
 
         effects_column = ttk.Frame(right_top)
@@ -269,7 +269,6 @@ class YTDemucsApp:
         eq_column.grid(row=0, column=1, sticky="nsw", padx=(10, 0))
         eq_column.columnconfigure(0, weight=1)
         eq_column.rowconfigure(1, weight=1)
-        ttk.Label(eq_column, text="3-Band EQ").grid(row=0, column=0, sticky="w")
 
         eq_sliders = ttk.Frame(eq_column)
         eq_sliders.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
@@ -295,8 +294,9 @@ class YTDemucsApp:
             row=0, column=2, sticky="ns", padx=10
         )
 
-        harmonics_frame = ttk.Frame(right_top)
+        harmonics_frame = ttk.Frame(right_top, width=180)
         harmonics_frame.grid(row=0, column=3, sticky="nsew")
+        harmonics_frame.grid_propagate(False)
         harmonics_frame.columnconfigure(0, weight=0)
         harmonics_frame.columnconfigure(1, weight=1)
 
@@ -2188,12 +2188,17 @@ class YTDemucsApp:
     @staticmethod
     def eq_db_from_slider(position: float) -> float:
         pos = max(0.0, min(position, 1.0))
-        if pos >= 0.5:
+        if abs(pos - 0.5) < 1e-6:
+            return 0.0
+
+        if pos > 0.5:
             t = (pos - 0.5) / 0.5
-            return 10.0 * math.log10(1 + 9 * t)
+            shaped = t ** 1.2
+            return 10.0 * math.log10(1 + 9 * shaped)
 
         t = (0.5 - pos) / 0.5
-        return -50.0 * math.log10(1 + 9 * t)
+        shaped = t ** 1.1
+        return -120.0 * shaped
 
     def update_gain_label(self, gain_db: float):
         if self.gain_label is not None:
@@ -2230,6 +2235,8 @@ class YTDemucsApp:
             raw = 0.5
 
         pos = max(0.0, min(raw, 1.0))
+        if abs(pos - 0.5) <= 0.08:
+            pos = 0.5
         self.eq_vars[band].set(pos)
         gain_db = self.eq_db_from_slider(pos)
         self.player.set_eq_gain(band, gain_db)
@@ -2239,7 +2246,7 @@ class YTDemucsApp:
             return
 
         pos = max(0.0, min(float(self.eq_vars[band].get()), 1.0))
-        if abs(pos - 0.5) <= 0.03:
+        if abs(pos - 0.5) <= 0.08:
             pos = 0.5
             self.eq_vars[band].set(pos)
 

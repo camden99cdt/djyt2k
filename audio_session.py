@@ -670,7 +670,7 @@ class AudioSession:
     def set_eq_gain(self, band: str, gain_db: float):
         if band not in self.eq_gains_db:
             return
-        self.eq_gains_db[band] = max(-50.0, min(float(gain_db), 10.0))
+        self.eq_gains_db[band] = max(-120.0, min(float(gain_db), 10.0))
 
     def _sync_reverb_states(self, reset: bool = False):
         targets = self._reverb_targets()
