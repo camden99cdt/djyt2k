@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Dict, List, Tuple, Set, Optional
+from typing import Any, Dict, List, Tuple, Set, Optional
 
 import numpy as np
 import soundfile as sf
@@ -143,6 +143,8 @@ class AudioSession:
         self.pending_ready: bool = False
         self._pending_generation: int = 0  # to discard stale builds
         self._pending_lock = threading.Lock()
+        self._render_worker_active: bool = False
+        self._queued_build: Optional[Dict[str, Any]] = None
 
         # Envelopes for UI (built from ORIGINAL audio only)
         self.stem_envelopes: Dict[str, List[float]] = {}
@@ -407,6 +409,135 @@ class AudioSession:
         np.clip(y, -1.0, 1.0, out=y)
         return np.asarray(y, dtype="float32")
 
+    def _launch_next_render_if_any(self):
+        next_request: Optional[Dict[str, Any]] = None
+        with self._pending_lock:
+            self._render_worker_active = False
+            if self._queued_build:
+                next_request = self._queued_build
+                self._queued_build = None
+                self._render_worker_active = True
+
+        if next_request:
+            thread = threading.Thread(
+                target=self._run_render_worker, args=(next_request,), daemon=True
+            )
+            thread.start()
+
+    def _run_render_worker(self, request: Dict[str, Any]):
+        generation = request["generation"]
+        tempo_rate = request["tempo_rate"]
+        pitch_semitones = request["pitch_semitones"]
+        stems_to_build = request["stems_to_build"]
+        include_mix = request["include_mix"]
+        base_stems = request["base_stems"]
+        base_mix = request["base_mix"]
+        mark_missing = request["mark_missing"]
+        target_play_all = request["target_play_all"]
+        target_active_stems = request["target_active_stems"]
+        log_callback = request["log_callback"]
+        progress_callback = request["progress_callback"]
+
+        try:
+            def is_stale() -> bool:
+                with self._pending_lock:
+                    return generation != self._pending_generation
+
+            def abort_if_stale() -> bool:
+                if is_stale():
+                    if log_callback:
+                        log_callback("Tempo/pitch rebuild superseded; aborting current job.")
+                    return True
+                return False
+
+            if log_callback:
+                log_callback(
+                    f"Rebuilding audio for tempo={tempo_rate:.2f}x, "
+                    f"pitch={pitch_semitones:+.1f} st..."
+                )
+
+            total_items = len(stems_to_build) + (1 if include_mix else 0)
+            completed = 0
+
+            sr = self.sample_rate
+            if sr is None:
+                return
+
+            new_stems: Dict[str, np.ndarray] = dict(base_stems)
+            for name in stems_to_build:
+                if abort_if_stale():
+                    return
+                orig = self.original_stem_data.get(name)
+                if orig is None:
+                    continue
+                if progress_callback:
+                    progress_callback(
+                        completed / float(max(total_items, 1)),
+                        f"{name}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
+                        total_items,
+                    )
+                new_stems[name] = self._apply_tempo_pitch(
+                    data=orig,
+                    tempo_rate=tempo_rate,
+                    pitch_semitones=pitch_semitones,
+                    sr=sr,
+                )
+                completed += 1
+
+            new_mix = base_mix
+            if include_mix and self.original_mix is not None:
+                if abort_if_stale():
+                    return
+                if progress_callback:
+                    progress_callback(
+                        completed / float(max(total_items, 1)),
+                        f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
+                        total_items,
+                    )
+                new_mix = self._apply_tempo_pitch(
+                    data=self.original_mix,
+                    tempo_rate=tempo_rate,
+                    pitch_semitones=pitch_semitones,
+                    sr=sr,
+                )
+                completed += 1
+
+            if abort_if_stale():
+                return
+
+            new_total_samples = self._compute_total_samples(new_stems, new_mix)
+            new_missing = (
+                set(self.original_stem_data.keys()) - set(new_stems.keys())
+                if mark_missing
+                else set()
+            )
+
+            with self._pending_lock:
+                if generation != self._pending_generation:
+                    return
+
+                self.pending_stem_data = new_stems
+                self.pending_mix_data = new_mix
+                self.pending_tempo_rate = tempo_rate
+                self.pending_pitch_semitones = pitch_semitones
+                self.pending_total_samples = new_total_samples
+                self.pending_missing_stems = new_missing
+                self.pending_ready = True
+                self.pending_target_play_all = target_play_all
+                self.pending_target_active_stems = set(target_active_stems)
+
+            if log_callback:
+                log_callback("New tempo/pitch configuration ready.")
+
+            if progress_callback:
+                progress_callback(1.0, "", total_items)
+
+        except Exception as e:
+            if log_callback:
+                log_callback(f"Error rebuilding audio for new tempo/pitch: {e}")
+        finally:
+            self._launch_next_render_if_any()
+
     def _queue_build(
         self,
         tempo_rate: float,
@@ -430,103 +561,6 @@ class AudioSession:
         if not stems_to_build and not include_mix:
             return
 
-        def worker(generation: int):
-            try:
-                def is_stale() -> bool:
-                    with self._pending_lock:
-                        return generation != self._pending_generation
-
-                def abort_if_stale() -> bool:
-                    if is_stale():
-                        if log_callback:
-                            log_callback("Tempo/pitch rebuild superseded; aborting current job.")
-                        return True
-                    return False
-
-                if log_callback:
-                    log_callback(
-                        f"Rebuilding audio for tempo={tempo_rate:.2f}x, "
-                        f"pitch={pitch_semitones:+.1f} st..."
-                    )
-
-                total_items = len(stems_to_build) + (1 if include_mix else 0)
-                completed = 0
-
-                sr = self.sample_rate
-                if sr is None:
-                    return
-
-                new_stems: Dict[str, np.ndarray] = dict(base_stems)
-                for name in stems_to_build:
-                    if abort_if_stale():
-                        return
-                    orig = self.original_stem_data.get(name)
-                    if orig is None:
-                        continue
-                    if progress_callback:
-                        progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"{name}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
-                            total_items,
-                        )
-                    new_stems[name] = self._apply_tempo_pitch(
-                        data=orig,
-                        tempo_rate=tempo_rate,
-                        pitch_semitones=pitch_semitones,
-                        sr=sr,
-                    )
-                    completed += 1
-
-                new_mix = base_mix
-                if include_mix and self.original_mix is not None:
-                    if abort_if_stale():
-                        return
-                    if progress_callback:
-                        progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
-                            total_items,
-                        )
-                    new_mix = self._apply_tempo_pitch(
-                        data=self.original_mix,
-                        tempo_rate=tempo_rate,
-                        pitch_semitones=pitch_semitones,
-                        sr=sr,
-                    )
-                    completed += 1
-
-                if abort_if_stale():
-                    return
-
-                new_total_samples = self._compute_total_samples(new_stems, new_mix)
-                new_missing = (
-                    set(self.original_stem_data.keys()) - set(new_stems.keys())
-                    if mark_missing
-                    else set()
-                )
-
-                with self._pending_lock:
-                    if generation != self._pending_generation:
-                        return
-
-                    self.pending_stem_data = new_stems
-                    self.pending_mix_data = new_mix
-                    self.pending_tempo_rate = tempo_rate
-                    self.pending_pitch_semitones = pitch_semitones
-                    self.pending_total_samples = new_total_samples
-                    self.pending_missing_stems = new_missing
-                    self.pending_ready = True
-
-                if log_callback:
-                    log_callback("New tempo/pitch configuration ready.")
-
-                if progress_callback:
-                    progress_callback(1.0, "", total_items)
-
-            except Exception as e:
-                if log_callback:
-                    log_callback(f"Error rebuilding audio for new tempo/pitch: {e}")
-
         with self._pending_lock:
             self._pending_generation += 1
             generation = self._pending_generation
@@ -542,7 +576,30 @@ class AudioSession:
                 else target_active_stems
             )
 
-        thread = threading.Thread(target=worker, args=(generation,), daemon=True)
+            request = {
+                "generation": generation,
+                "tempo_rate": tempo_rate,
+                "pitch_semitones": pitch_semitones,
+                "stems_to_build": stems_to_build,
+                "include_mix": include_mix,
+                "base_stems": base_stems,
+                "base_mix": base_mix,
+                "mark_missing": mark_missing,
+                "target_play_all": self.pending_target_play_all,
+                "target_active_stems": set(self.pending_target_active_stems),
+                "log_callback": log_callback,
+                "progress_callback": progress_callback,
+            }
+
+            if self._render_worker_active:
+                self._queued_build = request
+                return
+
+            self._render_worker_active = True
+
+        thread = threading.Thread(
+            target=self._run_render_worker, args=(request,), daemon=True
+        )
         thread.start()
 
     def cancel_pending_render(self):
@@ -558,6 +615,7 @@ class AudioSession:
             self.pending_pitch_semitones = self.pitch_semitones
             self.pending_target_play_all = self.play_all
             self.pending_target_active_stems = set(self.active_stems)
+            self._queued_build = None
 
     def reset_to_original_mix(self, current_position_seconds: Optional[float] = None) -> Optional[int]:
         """
@@ -599,6 +657,7 @@ class AudioSession:
             self.pending_pitch_semitones = self.pitch_semitones
             self.pending_target_play_all = self.play_all
             self.pending_target_active_stems = set(self.active_stems)
+            self._queued_build = None
 
         self._sync_reverb_states(reset=True)
 
