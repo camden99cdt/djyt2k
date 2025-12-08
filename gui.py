@@ -64,6 +64,17 @@ class YTDemucsApp:
             justify="center",
         )
 
+        self.default_label_color = self.style.lookup("TLabel", "foreground") or "#000000"
+        self.default_stem_color = (
+            self.style.lookup("TCheckbutton", "foreground") or self.default_label_color
+        )
+        self.color_render_in_progress = "#d8b400"
+        self.color_render_ready = "#00a04a"
+        self.color_unselected_rendering = "#a6a6a6"
+        self.color_unselected_ready = "#d37676"
+        self.color_cached_ready = "#7ac77a"
+        self.color_cached_rendering = "#e6d679"
+
         # Widgets toggled by playback enable/disable state
         self.playback_control_widgets: list[tk.Widget] = []
         self.playback_label_widgets: list[ttk.Label] = []
@@ -670,6 +681,8 @@ class YTDemucsApp:
         self.waveform_points: list[float] = []
         self.waveform_duration: float = 0.0
         self.stem_vars: dict[str, tk.BooleanVar] = {}
+        self.stem_checkbuttons: dict[str, ttk.Checkbutton] = {}
+        self.stem_display_state: dict[str, str] = {}
         self.last_stem_selection: set[str] = set()
 
         self.full_mix_path: str | None = None  # path to original yt-dlp wav
@@ -1600,6 +1613,8 @@ class YTDemucsApp:
         self.loop_start_line_id = None
         self.loop_end_line_id = None
         self.stem_vars.clear()
+        self.stem_checkbuttons.clear()
+        self.stem_display_state.clear()
 
         # load audio via player
         try:
@@ -1655,6 +1670,9 @@ class YTDemucsApp:
             )
             cb.grid(row=0, column=idx + 1, padx=(0, 5))
             self.stem_vars[stem_name] = var
+            self.stem_checkbuttons[stem_name] = cb
+            self.set_stem_color(stem_name, self.default_stem_color)
+            self.stem_display_state[stem_name] = "default"
 
         self.last_stem_selection = set(stem_names)
 
@@ -2207,6 +2225,8 @@ class YTDemucsApp:
         self.loop_end_line_id = None
         self.waveform_duration = 0.0
         self.stem_vars.clear()
+        self.stem_checkbuttons.clear()
+        self.stem_display_state.clear()
         self.full_mix_path = None
         self.current_title = None
         self.song_key_text = None
@@ -2285,6 +2305,9 @@ class YTDemucsApp:
             self.gain_label.config(text="+0.0 dB")
         if self.reverb_mix_label is not None:
             self.reverb_mix_label.config(text="45% wet")
+
+        self.update_speed_pitch_label_colors()
+        self.reset_stem_colors()
 
         # audio engine
         self.player.reset_to_original_mix()
@@ -2433,6 +2456,8 @@ class YTDemucsApp:
 
         # optional: redraw waveform (time axis effectively changes)
         self.draw_waveform()
+        self.update_speed_pitch_label_colors()
+        self.start_render_color_pass()
 
     @staticmethod
     def snap_pitch(v: float) -> float:
@@ -2488,6 +2513,8 @@ class YTDemucsApp:
         self.waveform_duration = self.player.get_duration()
         self.update_waveform_from_selection()
         self.draw_waveform()
+        self.update_speed_pitch_label_colors()
+        self.start_render_color_pass()
 
     @staticmethod
     def gain_db_from_slider(position: float) -> float:
@@ -2584,6 +2611,10 @@ class YTDemucsApp:
         if render_enqueued and not self.suppress_render_requests:
             self.render_revert_state = previous_state
             self.render_tasks_running = True
+            self.start_render_color_pass()
+            self.update_speed_pitch_label_colors()
+        else:
+            self.update_stem_colors_for_selection()
 
     def on_all_toggle(self):
         if self.all_var is None:
@@ -2599,6 +2630,10 @@ class YTDemucsApp:
         if render_enqueued and not self.suppress_render_requests:
             self.render_revert_state = previous_state
             self.render_tasks_running = True
+            self.start_render_color_pass()
+            self.update_speed_pitch_label_colors()
+        else:
+            self.update_stem_colors_for_selection()
 
     def on_volume_change(self, value: str):
         """
@@ -2645,6 +2680,132 @@ class YTDemucsApp:
             "stems": stems,
         }
 
+    # ---------- label + stem color helpers ----------
+
+    @staticmethod
+    def is_default_tempo_pitch(state: dict | None) -> bool:
+        if not state:
+            return True
+        return abs(state.get("speed", 1.0) - 1.0) < 1e-6 and abs(state.get("pitch", 0.0)) < 1e-6
+
+    def is_target_applied(self) -> bool:
+        return (
+            abs(self.last_requested_state.get("speed", 1.0) - self.applied_state.get("speed", 1.0))
+            < 1e-6
+            and abs(self.last_requested_state.get("pitch", 0.0) - self.applied_state.get("pitch", 0.0))
+            < 1e-6
+            and bool(self.last_requested_state.get("all", True))
+            == bool(self.applied_state.get("all", True))
+            and set(self.last_requested_state.get("stems", set()))
+            == set(self.applied_state.get("stems", set()))
+        )
+
+    def update_speed_pitch_label_colors(self):
+        if self.speed_label is None or self.pitch_label is None:
+            return
+
+        if self.is_default_tempo_pitch(self.last_requested_state):
+            self.speed_label.configure(foreground=self.default_label_color)
+            self.pitch_label.configure(foreground=self.default_label_color)
+            return
+
+        rendering = self.render_tasks_running and not self.is_target_applied()
+        target_color = self.color_render_in_progress if rendering else self.color_render_ready
+        self.speed_label.configure(foreground=target_color)
+        self.pitch_label.configure(foreground=target_color)
+
+    def set_stem_color(self, name: str, color: str):
+        widget = self.stem_checkbuttons.get(name)
+        if widget is not None:
+            widget.configure(foreground=color)
+
+    def reset_stem_colors(self):
+        for name in self.stem_checkbuttons:
+            self.stem_display_state[name] = "default"
+            self.set_stem_color(name, self.default_stem_color)
+
+    def start_render_color_pass(self):
+        if not self.stem_checkbuttons:
+            return
+        if self.is_default_tempo_pitch(self.last_requested_state):
+            self.reset_stem_colors()
+            return
+
+        selected = (
+            set()
+            if self.last_requested_state.get("all", True)
+            else set(self.last_requested_state.get("stems", set()))
+        )
+        for name in self.stem_checkbuttons:
+            if name in selected:
+                self.stem_display_state[name] = "selected_rendering"
+                self.set_stem_color(name, self.color_render_in_progress)
+            else:
+                previous = self.stem_display_state.get(name)
+                if previous == "cached_ready":
+                    self.stem_display_state[name] = "cached_rendering"
+                    self.set_stem_color(name, self.color_cached_rendering)
+                else:
+                    self.stem_display_state[name] = "unselected_rendering"
+                    self.set_stem_color(name, self.color_unselected_rendering)
+
+    def complete_render_color_pass(self):
+        if not self.stem_checkbuttons:
+            return
+        if self.is_default_tempo_pitch(self.last_requested_state):
+            self.reset_stem_colors()
+            return
+
+        selected = (
+            set()
+            if self.last_requested_state.get("all", True)
+            else set(self.last_requested_state.get("stems", set()))
+        )
+        for name in self.stem_checkbuttons:
+            if name in selected:
+                self.stem_display_state[name] = "selected_ready"
+                self.set_stem_color(name, self.color_render_ready)
+            else:
+                previous = self.stem_display_state.get(name)
+                if previous == "selected_ready":
+                    self.stem_display_state[name] = "cached_ready"
+                    self.set_stem_color(name, self.color_cached_ready)
+                elif previous == "cached_rendering":
+                    self.stem_display_state[name] = "unselected_ready"
+                    self.set_stem_color(name, self.color_unselected_ready)
+                elif previous == "cached_ready":
+                    self.set_stem_color(name, self.color_cached_ready)
+                else:
+                    self.stem_display_state[name] = "unselected_ready"
+                    self.set_stem_color(name, self.color_unselected_ready)
+
+    def update_stem_colors_for_selection(self):
+        if not self.stem_checkbuttons:
+            return
+        if self.is_default_tempo_pitch(self.last_requested_state):
+            self.reset_stem_colors()
+            return
+
+        selected = (
+            set()
+            if self.last_requested_state.get("all", True)
+            else {name for name, var in self.stem_vars.items() if var.get()}
+        )
+        for name in self.stem_checkbuttons:
+            if name in selected:
+                self.stem_display_state[name] = "selected_ready"
+                self.set_stem_color(name, self.color_render_ready)
+            else:
+                previous = self.stem_display_state.get(name)
+                if previous == "selected_ready":
+                    self.stem_display_state[name] = "cached_ready"
+                    self.set_stem_color(name, self.color_cached_ready)
+                elif previous == "cached_ready":
+                    self.set_stem_color(name, self.color_cached_ready)
+                else:
+                    self.stem_display_state[name] = "unselected_ready"
+                    self.set_stem_color(name, self.color_unselected_ready)
+
     def reset_render_tracking_from_ui(self):
         state = self.capture_playback_state()
         self.applied_state = dict(state)
@@ -2656,6 +2817,8 @@ class YTDemucsApp:
             self.render_last_label_text = self.render_progress_label_var.get()
         else:
             self.render_last_label_text = "Rendering: Ready"
+        self.update_speed_pitch_label_colors()
+        self.reset_stem_colors()
 
     def prepare_render_request(self):
         self.render_revert_state = dict(self.last_requested_state)
@@ -2693,6 +2856,8 @@ class YTDemucsApp:
 
             self.update_waveform_from_selection()
             self.draw_waveform()
+            self.update_speed_pitch_label_colors()
+            self.update_stem_colors_for_selection()
         finally:
             self.suppress_render_requests = False
 
@@ -2712,6 +2877,8 @@ class YTDemucsApp:
             self.apply_ui_state(target_state)
             self.applied_state = dict(target_state)
             self.last_requested_state = dict(target_state)
+        self.update_speed_pitch_label_colors()
+        self.update_stem_colors_for_selection()
         self.render_revert_state = None
 
     def on_render_label_enter(self, _event=None):
@@ -2788,6 +2955,8 @@ class YTDemucsApp:
                 self.render_revert_state = None
                 self.applied_state = self.capture_playback_state()
                 self.last_requested_state = dict(self.applied_state)
+                self.complete_render_color_pass()
+                self.update_speed_pitch_label_colors()
                 if self.render_hovering_cancel:
                     self.render_hovering_cancel = False
                     if self.render_progress_label is not None:
