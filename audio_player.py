@@ -189,15 +189,6 @@ class StemAudioPlayer:
     def cancel_pending_render(self):
         self.session.cancel_pending_render()
 
-    def reset_to_original_mix(self):
-        if self.session.sample_rate is None:
-            return
-
-        current_pos = self.play_index / float(self.session.sample_rate)
-        new_index = self.session.reset_to_original_mix(current_pos)
-        if new_index is not None:
-            self.play_index = new_index
-
 
     def set_reverb_enabled(self, enabled: bool):
         self.session.set_reverb_enabled(enabled)
