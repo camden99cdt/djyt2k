@@ -1892,11 +1892,12 @@ class YTDemucsApp:
 
         if self.player.loop_controller.enabled:
             self.harmonics_frame.grid_remove()
-            self.loop_tools_frame.grid()
+            self.loop_tools_frame.grid(row=0, column=2, sticky="nsew")
+            self.loop_tools_frame.tkraise()
             self.update_loop_position_labels()
         else:
             self.loop_tools_frame.grid_remove()
-            self.harmonics_frame.grid()
+            self.harmonics_frame.grid(row=0, column=2, sticky="nsew")
 
     def on_waveform_click(self, event):
         if self.wave_canvas is None or self.waveform_duration <= 0:
