@@ -377,7 +377,7 @@ class YTDemucsApp:
         controls_frame = ttk.Frame(self.sessions_tab)
         controls_frame.grid(row=0, column=1, rowspan=3, sticky="nsew")
         controls_frame.columnconfigure(0, weight=1)
-        controls_frame.rowconfigure(11, weight=1)
+        controls_frame.rowconfigure(13, weight=1)
 
         ttk.Label(controls_frame, text="Sort by:").grid(row=0, column=0, sticky="w")
         self.sort_var = tk.StringVar(value="newest")
@@ -462,13 +462,34 @@ class YTDemucsApp:
             controls_frame, text="Clear", command=self.reset_session_filters
         ).grid(row=10, column=0, sticky="ew", pady=(10, 0))
 
+        ttk.Label(controls_frame, text="Session Title").grid(
+            row=11, column=0, sticky="w", pady=(10, 2)
+        )
+        title_row = ttk.Frame(controls_frame)
+        title_row.grid(row=12, column=0, sticky="ew")
+        title_row.columnconfigure(0, weight=1)
+
+        self.session_title_var = tk.StringVar()
+        self._session_title_trace_suppressed = False
+        self.session_title_entry = ttk.Entry(
+            title_row, textvariable=self.session_title_var, width=32
+        )
+        self.session_title_entry.grid(row=0, column=0, sticky="ew")
+
+        self.session_title_reset_button = ttk.Button(
+            title_row, text="✕", width=2, command=self.reset_session_title
+        )
+        self.session_title_reset_button.grid(row=0, column=1, padx=(6, 0))
+
+        self.session_title_var.trace_add("write", self.on_session_title_change)
+
         self.save_delete_button = ttk.Button(
             controls_frame,
             text="Save Session",
             command=self.on_save_or_delete,
             state="disabled",
         )
-        self.save_delete_button.grid(row=12, column=0, sticky="ew", pady=(10, 0))
+        self.save_delete_button.grid(row=13, column=0, sticky="ew", pady=(10, 0))
 
         root.rowconfigure(0, weight=1)
         root.columnconfigure(0, weight=1)
@@ -530,6 +551,7 @@ class YTDemucsApp:
 
         self.full_mix_path: str | None = None  # path to original yt-dlp wav
         self.current_title: str | None = None
+        self.session_title_original: str | None = None
         self.song_key_text: str | None = None  # detected key, e.g. "F major"
 
         # search suggestions
@@ -591,6 +613,73 @@ class YTDemucsApp:
         if self.current_title:
             return self.current_title
         return self.base_title
+
+    # ---------- session title input ----------
+
+    def _set_session_title_var(self, title: str):
+        self._session_title_trace_suppressed = True
+        self.session_title_var.set(title)
+        self._session_title_trace_suppressed = False
+
+    def set_session_title(self, title: str | None):
+        self.session_title_original = title
+        self._set_session_title_var(title or "")
+        self.current_title = title
+        self.update_session_title_widgets_state()
+        self.update_save_button_state()
+
+    def reset_session_title(self):
+        if self.session_title_original is None:
+            self._set_session_title_var("")
+            self.current_title = None
+        else:
+            self._set_session_title_var(self.session_title_original)
+            self.current_title = self.session_title_original
+        self.update_save_button_state()
+
+    def get_entered_session_title(self) -> str:
+        return (self.session_title_var.get() or "").strip() or "Untitled"
+
+    def on_session_title_change(self, *_):
+        if self._session_title_trace_suppressed:
+            return
+
+        raw_title = (self.session_title_var.get() or "").strip()
+        self.current_title = raw_title or None
+        self.update_save_button_state()
+
+    def is_rename_mode(self) -> bool:
+        if not self.selected_saved_session_id or self.session_title_original is None:
+            return False
+
+        current_value = (self.session_title_var.get() or "").strip()
+        original_value = (self.session_title_original or "").strip()
+        return current_value != original_value
+
+    def update_session_title_widgets_state(self):
+        editable = bool(
+            self.has_active_session()
+            or self.current_pipeline_result
+            or self.selected_saved_session_id
+        )
+        state = "normal" if editable else "disabled"
+        try:
+            self.session_title_entry.state(["!disabled"] if editable else ["disabled"])
+        except Exception:
+            try:
+                self.session_title_entry.configure(state=state)
+            except Exception:
+                pass
+
+        try:
+            self.session_title_reset_button.state(
+                ["!disabled"] if editable else ["disabled"]
+            )
+        except Exception:
+            try:
+                self.session_title_reset_button.configure(state=state)
+            except Exception:
+                pass
 
     # ---------- menu + window management ----------
 
@@ -1070,6 +1159,8 @@ class YTDemucsApp:
         self.selected_saved_session_id = None
         self.saved_sessions_listbox.selection_clear(0, tk.END)
 
+        self.set_session_title(result.title)
+
         if result.thumbnail_url:
             self.update_thumbnail(result.thumbnail_url)
 
@@ -1248,11 +1339,15 @@ class YTDemucsApp:
 
     def update_save_button_state(self):
         if self.selected_saved_session_id:
-            self.save_delete_button.config(text="Delete Session", state="normal")
+            if self.is_rename_mode():
+                self.save_delete_button.config(text="Rename Session", state="normal")
+            else:
+                self.save_delete_button.config(text="Delete Session", state="normal")
         elif self.current_pipeline_result:
             self.save_delete_button.config(text="Save Session", state="normal")
         else:
             self.save_delete_button.config(text="Save Session", state="disabled")
+        self.update_session_title_widgets_state()
 
     def show_session_loading(self, message: str = "Loading session..."):
         self.session_loading_var.set(message)
@@ -1260,6 +1355,8 @@ class YTDemucsApp:
         self.session_loading_bar.start(10)
         self.saved_sessions_listbox.configure(state="disabled")
         self.save_delete_button.configure(state="disabled")
+        self.session_title_entry.state(["disabled"])
+        self.session_title_reset_button.state(["disabled"])
 
     def hide_session_loading(self):
         self.session_loading_var.set("")
@@ -1290,7 +1387,10 @@ class YTDemucsApp:
 
     def on_save_or_delete(self):
         if self.selected_saved_session_id:
-            self.delete_selected_session()
+            if self.is_rename_mode():
+                self.rename_selected_session()
+            else:
+                self.delete_selected_session()
         else:
             self.save_current_session()
 
@@ -1300,10 +1400,12 @@ class YTDemucsApp:
             messagebox.showinfo("Save Session", "No session available to save.")
             return
 
+        title = self.get_entered_session_title()
+
         def worker():
             try:
                 session = self.saved_session_store.add_session(
-                    title=self.current_title or "Untitled",
+                    title=title,
                     song_key_text=self.song_key_text,
                     session_dir=result.session_dir,
                     audio_path=result.audio_path,
@@ -1317,6 +1419,8 @@ class YTDemucsApp:
 
             def _after_save():
                 self.current_pipeline_result = None
+                self.set_session_title(session.title)
+                self.full_mix_path = session.audio_path
                 self.selected_saved_session_id = session.session_id
                 self.refresh_saved_sessions_list()
                 self.update_save_button_state()
@@ -1337,6 +1441,23 @@ class YTDemucsApp:
         self.refresh_saved_sessions_list()
         self.update_save_button_state()
 
+    def rename_selected_session(self):
+        session_id = self.selected_saved_session_id
+        if not session_id:
+            return
+
+        new_title = self.get_entered_session_title()
+        session = self.saved_session_store.rename_session(session_id, new_title)
+        if not session:
+            return
+
+        self.session_title_original = new_title
+        self.current_title = new_title
+        self.root.title(new_title)
+        self.refresh_saved_sessions_list()
+        self.update_save_button_state()
+        self.append_log(f"Renamed session: {session.display_name}")
+
     def load_saved_session(self, session: SavedSession):
         self.append_log(f"Loading saved session: {session.display_name}")
         self.show_session_loading(f"Loading {session.title}...")
@@ -1345,6 +1466,8 @@ class YTDemucsApp:
         self.current_title = session.title
         self.song_key_text = session.song_key_text
         self.current_pipeline_result = None
+
+        self.set_session_title(session.title)
 
         if session.thumbnail_path:
             self.set_thumbnail_from_file(session.thumbnail_path)
@@ -1929,9 +2052,12 @@ class YTDemucsApp:
         self.stem_vars.clear()
         self.full_mix_path = None
         self.current_title = None
+        self.session_title_original = None
         self.song_key_text = None
         self.current_pipeline_result = None
         self.current_thumbnail_bytes = None
+
+        self._set_session_title_var("")
 
         self.thumbnail_image = None
         self.thumbnail_label.configure(image="", text="No\nthumbnail")

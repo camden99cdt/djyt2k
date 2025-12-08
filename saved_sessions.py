@@ -172,3 +172,12 @@ class SavedSessionStore:
 
     def get_session(self, session_id: str) -> Optional[SavedSession]:
         return next((s for s in self.sessions if s.session_id == session_id), None)
+
+    def rename_session(self, session_id: str, new_title: str) -> Optional[SavedSession]:
+        session = self.get_session(session_id)
+        if not session:
+            return None
+
+        session.title = new_title
+        self._write_sessions()
+        return session
