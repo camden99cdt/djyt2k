@@ -49,7 +49,12 @@ class YTDemucsApp:
         self.style.configure("DisabledPlayback.TFrame", background="#e6e6e6")
         self.style.configure("DisabledPlayback.TLabel", foreground="#777777")
         self.setup_meter_styles()
-        self.style.configure("BandToggle.TCheckbutton", padding=(0, 8))
+        self.style.layout("BandToggle.Toolbutton", self.style.layout("Toolbutton"))
+        self.style.configure("BandToggle.Toolbutton", padding=(3, 10))
+        self.style.map(
+            "BandToggle.Toolbutton",
+            relief=[("pressed", "sunken"), ("selected", "sunken"), ("!selected", "flat")],
+        )
         self.render_label_width_chars = 32
         self.style.configure(
             "RenderProgress.TLabel",
@@ -169,7 +174,7 @@ class YTDemucsApp:
             filter_column,
             variable=self.high_band_var,
             command=self.on_frequency_band_toggle,
-            style="BandToggle.TCheckbutton",
+            style="BandToggle.Toolbutton",
             text="",
             width=0,
         )
@@ -179,7 +184,7 @@ class YTDemucsApp:
             filter_column,
             variable=self.mid_band_var,
             command=self.on_frequency_band_toggle,
-            style="BandToggle.TCheckbutton",
+            style="BandToggle.Toolbutton",
             text="",
             width=0,
         )
@@ -189,7 +194,7 @@ class YTDemucsApp:
             filter_column,
             variable=self.low_band_var,
             command=self.on_frequency_band_toggle,
-            style="BandToggle.TCheckbutton",
+            style="BandToggle.Toolbutton",
             text="",
             width=0,
         )
