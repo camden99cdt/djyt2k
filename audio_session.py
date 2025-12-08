@@ -570,12 +570,16 @@ class AudioSession:
     def set_reverb_wet(self, wet: float):
         self.reverb_wet = max(0.0, min(float(wet), 1.0))
 
-    def _sync_reverb_states(self):
+    def _sync_reverb_states(self, reset: bool = False):
         targets = self._reverb_targets()
         for name in list(self.reverb_states.keys()):
             if name not in targets:
                 self.reverb_states[name].reset()
                 del self.reverb_states[name]
+
+        if reset:
+            for state in self.reverb_states.values():
+                state.reset()
 
     def _reverb_targets(self) -> Set[str]:
         if self.play_all:

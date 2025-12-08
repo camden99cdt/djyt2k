@@ -1954,6 +1954,14 @@ class YTDemucsApp:
         if self.reverb_mix_var is not None:
             self.reverb_mix_var.set(0.45)
 
+        # stem selection — always revert to the All mix at default speed/pitch
+        if self.all_var is not None:
+            self.all_var.set(True)
+        if self.stem_vars:
+            for var in self.stem_vars.values():
+                var.set(False)
+        self.last_stem_selection.clear()
+
         # labels
         if self.volume_label is not None:
             self.volume_label.config(text="100%")
@@ -1967,8 +1975,8 @@ class YTDemucsApp:
             self.reverb_mix_label.config(text="45% wet")
 
         # audio engine
+        self.player.reset_to_original_mix()
         self.player.set_master_volume(1.0)
-        self.player.set_tempo_and_pitch(1.0, 0.0)
         self.player.set_gain_db(0.0)
         self.player.set_reverb_enabled(False)
         self.player.set_reverb_wet(0.45)
