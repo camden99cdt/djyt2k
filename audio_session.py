@@ -121,6 +121,15 @@ class AudioSession:
         self.pending_total_samples: int = 0
         self.pending_ready: bool = False
         self._pending_generation: int = 0  # to discard stale builds
+
+        # Render queue management (for stem selection/mix builds)
+        self._build_queue: List[str] = []
+        self._build_total_items: int = 0
+        self._build_completed_items: int = 0
+        self._build_new_stems: Dict[str, np.ndarray] = {}
+        self._build_new_mix: Optional[np.ndarray] = None
+        self._build_worker: Optional[threading.Thread] = None
+        self._build_mark_missing: bool = True
         self._pending_lock = threading.Lock()
 
         # Envelopes for UI (built from ORIGINAL audio only)
@@ -394,7 +403,8 @@ class AudioSession:
         stems_to_build = set(stems_to_build)
         include_mix = bool(include_mix) and self.original_mix is not None
 
-        if not stems_to_build and not include_mix:
+        has_active_worker = self._build_worker is not None and self._build_worker.is_alive()
+        if not stems_to_build and not include_mix and not has_active_worker:
             return
 
         def worker(generation: int):
@@ -403,114 +413,176 @@ class AudioSession:
                     with self._pending_lock:
                         return generation != self._pending_generation
 
-                def abort_if_stale() -> bool:
-                    if is_stale():
-                        if log_callback:
-                            log_callback("Tempo/pitch rebuild superseded; aborting current job.")
-                        return True
-                    return False
-
                 if log_callback:
                     log_callback(
                         f"Rebuilding audio for tempo={tempo_rate:.2f}x, "
                         f"pitch={pitch_semitones:+.1f} st..."
                     )
 
-                total_items = len(stems_to_build) + (1 if include_mix else 0)
-                completed = 0
+                while True:
+                    with self._pending_lock:
+                        if generation != self._pending_generation:
+                            return
 
-                sr = self.sample_rate
-                if sr is None:
-                    return
+                        if not self._build_queue:
+                            new_total_samples = self._compute_total_samples(
+                                self._build_new_stems, self._build_new_mix
+                            )
+                            new_missing = (
+                                set(self.original_stem_data.keys())
+                                - set(self._build_new_stems.keys())
+                                if self._build_mark_missing
+                                else set()
+                            )
 
-                new_stems: Dict[str, np.ndarray] = dict(base_stems)
-                for name in stems_to_build:
-                    if abort_if_stale():
+                            self.pending_stem_data = dict(self._build_new_stems)
+                            self.pending_mix_data = self._build_new_mix
+                            self.pending_tempo_rate = tempo_rate
+                            self.pending_pitch_semitones = pitch_semitones
+                            self.pending_total_samples = new_total_samples
+                            self.pending_missing_stems = new_missing
+                            self.pending_ready = True
+
+                            if progress_callback:
+                                progress_callback(1.0, "", self._build_total_items)
+                            return
+
+                        task = self._build_queue.pop(0)
+                        total_items = max(self._build_total_items, 1)
+                        completed = self._build_completed_items
+                        self.pending_ready = False
+
+                    if is_stale():
                         return
-                    orig = self.original_stem_data.get(name)
-                    if orig is None:
+
+                    sr = self.sample_rate
+                    if sr is None:
+                        return
+
+                    if task == "__mix__":
+                        label = f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st"
+                        source = self.original_mix
+                    else:
+                        label = f"{task}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st"
+                        source = self.original_stem_data.get(task)
+
+                    if source is None:
+                        with self._pending_lock:
+                            self._build_total_items = max(1, total_items)
                         continue
+
                     if progress_callback:
                         progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"{name}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
-                            total_items,
+                            completed / float(max(total_items, 1)), label, total_items
                         )
-                    new_stems[name] = self._apply_tempo_pitch(
-                        data=orig,
+
+                    processed = self._apply_tempo_pitch(
+                        data=source,
                         tempo_rate=tempo_rate,
                         pitch_semitones=pitch_semitones,
                         sr=sr,
                     )
-                    completed += 1
 
-                new_mix = base_mix
-                if include_mix and self.original_mix is not None:
-                    if abort_if_stale():
-                        return
-                    if progress_callback:
-                        progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
-                            total_items,
+                    with self._pending_lock:
+                        if generation != self._pending_generation:
+                            return
+
+                        if task == "__mix__":
+                            self._build_new_mix = processed
+                        else:
+                            self._build_new_stems[task] = processed
+
+                        self._build_completed_items += 1
+                        self._build_total_items = self._build_completed_items + len(
+                            self._build_queue
                         )
-                    new_mix = self._apply_tempo_pitch(
-                        data=self.original_mix,
-                        tempo_rate=tempo_rate,
-                        pitch_semitones=pitch_semitones,
-                        sr=sr,
-                    )
-                    completed += 1
 
-                if abort_if_stale():
-                    return
-
-                new_total_samples = self._compute_total_samples(new_stems, new_mix)
-                new_missing = (
-                    set(self.original_stem_data.keys()) - set(new_stems.keys())
-                    if mark_missing
-                    else set()
-                )
-
-                with self._pending_lock:
-                    if generation != self._pending_generation:
-                        return
-
-                    self.pending_stem_data = new_stems
-                    self.pending_mix_data = new_mix
-                    self.pending_tempo_rate = tempo_rate
-                    self.pending_pitch_semitones = pitch_semitones
-                    self.pending_total_samples = new_total_samples
-                    self.pending_missing_stems = new_missing
-                    self.pending_ready = True
-
-                if log_callback:
-                    log_callback("New tempo/pitch configuration ready.")
-
-                if progress_callback:
-                    progress_callback(1.0, "", total_items)
+                        if progress_callback:
+                            progress_callback(
+                                self._build_completed_items
+                                / float(max(self._build_total_items, 1)),
+                                label,
+                                self._build_total_items,
+                            )
 
             except Exception as e:
                 if log_callback:
                     log_callback(f"Error rebuilding audio for new tempo/pitch: {e}")
 
-        with self._pending_lock:
-            self._pending_generation += 1
-            generation = self._pending_generation
-            self.pending_ready = False
-            self.pending_tempo_rate = tempo_rate
-            self.pending_pitch_semitones = pitch_semitones
-            self.pending_target_play_all = (
-                self.play_all if target_play_all is None else bool(target_play_all)
-            )
-            self.pending_target_active_stems = set(
-                self.active_stems
-                if target_active_stems is None
-                else target_active_stems
-            )
+        play_all_flag = self.play_all if target_play_all is None else bool(target_play_all)
+        active_target = (
+            set(self.active_stems)
+            if target_active_stems is None
+            else set(target_active_stems)
+        )
 
-        thread = threading.Thread(target=worker, args=(generation,), daemon=True)
-        thread.start()
+        with self._pending_lock:
+            reset_worker = play_all_flag
+            current_worker_alive = self._build_worker is not None and self._build_worker.is_alive()
+            if current_worker_alive:
+                same_params = (
+                    abs(tempo_rate - self.pending_tempo_rate) < 1e-3
+                    and abs(pitch_semitones - self.pending_pitch_semitones) < 1e-3
+                )
+                if not same_params:
+                    reset_worker = True
+
+            if reset_worker or not current_worker_alive:
+                self._pending_generation += 1
+                generation = self._pending_generation
+                self.pending_ready = False
+                self.pending_tempo_rate = tempo_rate
+                self.pending_pitch_semitones = pitch_semitones
+                self.pending_target_play_all = play_all_flag
+                self.pending_target_active_stems = set(active_target)
+                self._build_queue = []
+                self._build_completed_items = 0
+                self._build_total_items = 0
+                self._build_new_stems = dict(base_stems)
+                self._build_new_mix = base_mix
+                self._build_mark_missing = mark_missing
+            else:
+                generation = self._pending_generation
+                self.pending_ready = False
+                self.pending_target_play_all = play_all_flag
+                self.pending_target_active_stems = set(active_target)
+                self._build_mark_missing = mark_missing
+                for name, data in base_stems.items():
+                    if name not in self._build_new_stems:
+                        self._build_new_stems[name] = data
+                if self._build_new_mix is None:
+                    self._build_new_mix = base_mix
+
+            # Remove tasks no longer needed (e.g., deselected stems)
+            if play_all_flag:
+                self._build_queue = [task for task in self._build_queue if task == "__mix__"]
+            else:
+                self._build_queue = [
+                    task
+                    for task in self._build_queue
+                    if task == "__mix__" or task in active_target
+                ]
+
+            if include_mix and self.original_mix is not None:
+                if self._build_new_mix is None and "__mix__" not in self._build_queue:
+                    self._build_queue.append("__mix__")
+            else:
+                self._build_queue = [task for task in self._build_queue if task != "__mix__"]
+
+            if not play_all_flag:
+                for name in stems_to_build:
+                    if name in self._build_new_stems:
+                        continue
+                    if name not in self._build_queue:
+                        self._build_queue.append(name)
+
+            self._build_total_items = self._build_completed_items + len(self._build_queue)
+
+            if not current_worker_alive or reset_worker:
+                self._build_worker = threading.Thread(
+                    target=worker, args=(self._pending_generation,), daemon=True
+                )
+                self._build_worker.start()
 
     def cancel_pending_render(self):
         """Abort any in-flight render tasks and clear pending buffers."""
@@ -525,6 +597,12 @@ class AudioSession:
             self.pending_pitch_semitones = self.pitch_semitones
             self.pending_target_play_all = self.play_all
             self.pending_target_active_stems = set(self.active_stems)
+            self._build_queue = []
+            self._build_total_items = 0
+            self._build_completed_items = 0
+            self._build_new_stems = {}
+            self._build_new_mix = None
+            self._build_mark_missing = True
 
     def reset_to_original_mix(self, current_position_seconds: Optional[float] = None) -> Optional[int]:
         """
@@ -566,6 +644,12 @@ class AudioSession:
             self.pending_pitch_semitones = self.pitch_semitones
             self.pending_target_play_all = self.play_all
             self.pending_target_active_stems = set(self.active_stems)
+            self._build_queue = []
+            self._build_total_items = 0
+            self._build_completed_items = 0
+            self._build_new_stems = {}
+            self._build_new_mix = None
+            self._build_mark_missing = True
 
         self._sync_reverb_states(reset=True)
 
@@ -741,7 +825,11 @@ class AudioSession:
         missing_stems = required_stems - set(self.current_stem_data.keys())
         mix_missing = include_mix and self.current_mix_data is None
 
-        if not missing_stems and not mix_missing:
+        queue_active = self._build_queue or (
+            self._build_worker is not None and self._build_worker.is_alive()
+        )
+
+        if not missing_stems and not mix_missing and not queue_active:
             return
 
         self._queue_build(
