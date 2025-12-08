@@ -715,11 +715,25 @@ class AudioSession:
             self._frequency_filters = filters
             self._reset_filter_state_locked()
 
-    def _reset_filter_state_locked(self):
-        self._frequency_filter_states = {
-            name: sosfilt_zi(sos).astype("float32")
-            for name, sos in self._frequency_filters.items()
-        }
+    def _reset_filter_state_locked(self, initial_value: Optional[np.ndarray] = None):
+        self._frequency_filter_states = {}
+
+        if initial_value is None:
+            for name, sos in self._frequency_filters.items():
+                self._frequency_filter_states[name] = sosfilt_zi(sos).astype("float32")
+            return
+
+        initial = np.asarray(initial_value, dtype="float32")
+        for name, sos in self._frequency_filters.items():
+            state = sosfilt_zi(sos).astype("float32")
+
+            if initial.ndim == 0:
+                state *= initial
+            else:
+                expanded = initial.reshape((1,) * (state.ndim - initial.ndim) + initial.shape)
+                state *= expanded
+
+            self._frequency_filter_states[name] = state
 
     def set_frequency_bands(self, low: bool, mid: bool, high: bool):
         with self._frequency_filter_lock:
@@ -751,7 +765,8 @@ class AudioSession:
 
         with self._frequency_filter_lock:
             if self._frequency_filters and not self._frequency_filter_states:
-                self._reset_filter_state_locked()
+                initial_sample = chunk[0] if chunk.size else None
+                self._reset_filter_state_locked(initial_value=initial_sample)
 
             chunk_len = chunk.shape[0]
             ramp_samples = max(1, int(self._frequency_gain_ramp_samples))
