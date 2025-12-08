@@ -285,7 +285,7 @@ class YTDemucsApp:
             self.key_table_headers.append(header)
 
             value_lbl = ttk.Label(
-                harmonics_frame, text="N/A", anchor="e", justify="right"
+                harmonics_frame, text="N/A", anchor="e", justify="right", width=8
             )
             value_lbl.grid(row=idx, column=1, sticky="e", pady=(0, 4), padx=(10, 0))
             self.key_table_value_labels[value_key] = value_lbl
