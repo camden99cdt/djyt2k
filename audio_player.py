@@ -52,6 +52,7 @@ class StemAudioPlayer:
         self.is_paused: bool = False
 
         self.loop_controller = LoopController()
+        self.loop_crossfade_enabled: bool = False
 
     # ---------- global master volume ----------
 
@@ -97,6 +98,7 @@ class StemAudioPlayer:
         self.is_paused = False
         self.loop_controller.reset_bounds()
         self.loop_controller.set_enabled(False)
+        self.loop_crossfade_enabled = False
 
     # ---------- envelopes / selection ----------
 
@@ -323,6 +325,17 @@ class StemAudioPlayer:
         filled = 0
         current_index = min(self.play_index, loop_end)
 
+        sample_rate = self.session.sample_rate or 0
+        crossfade_samples = 0
+        loop_length = loop_end - loop_start
+        if self.loop_crossfade_enabled and sample_rate > 0 and loop_length > 1:
+            loop_length_seconds = loop_length / float(sample_rate)
+            crossfade_ms = min(50.0, max(10.0, loop_length_seconds * 1000.0 * 0.1))
+            crossfade_samples = min(
+                loop_length - 1,
+                max(1, int(crossfade_ms * sample_rate / 1000.0)),
+            )
+
         while filled < frames:
             if current_index >= loop_end:
                 current_index = loop_start
@@ -330,6 +343,37 @@ class StemAudioPlayer:
             remaining_loop = loop_end - current_index
             if remaining_loop <= 0:
                 break
+
+            if crossfade_samples > 0 and remaining_loop <= crossfade_samples:
+                pre_len = max(0, remaining_loop - crossfade_samples)
+                if pre_len > 0:
+                    segment = self.session.get_chunk(current_index, pre_len)
+                    n = segment.size
+                    if n == 0:
+                        break
+                    to_write = min(n, frames - filled)
+                    chunk[filled : filled + to_write] = segment[:to_write]
+                    filled += to_write
+                    current_index += to_write
+                    if filled >= frames:
+                        break
+
+                fade_len = min(crossfade_samples, frames - filled)
+                if fade_len <= 0:
+                    break
+                end_segment = self.session.get_chunk(current_index, fade_len)
+                start_segment = self.session.get_chunk(loop_start, fade_len)
+                n = min(end_segment.size, start_segment.size, fade_len)
+                if n == 0:
+                    break
+                weights = np.linspace(1.0, 0.0, n, dtype="float32")
+                chunk[filled : filled + n] = (
+                    end_segment[:n] * weights
+                    + start_segment[:n] * (1.0 - weights)
+                )
+                filled += n
+                current_index = loop_start + n
+                continue
 
             to_copy = min(frames - filled, remaining_loop)
             segment = self.session.get_chunk(current_index, to_copy)
@@ -416,6 +460,9 @@ class StemAudioPlayer:
 
     def get_loop_bounds_seconds(self) -> tuple[float, float]:
         return self.loop_controller.get_bounds_seconds(self.get_duration())
+
+    def set_loop_crossfade_enabled(self, enabled: bool):
+        self.loop_crossfade_enabled = bool(enabled)
 
     # ---------- query ----------
 
