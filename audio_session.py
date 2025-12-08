@@ -3,11 +3,41 @@ from __future__ import annotations
 
 import os
 import threading
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Set, Optional
 
 import numpy as np
 import soundfile as sf
 import librosa
+
+
+@dataclass
+class RenderPlan:
+    tempo_rate: float
+    pitch_semitones: float
+    include_mix: bool
+    mark_missing: bool
+    target_play_all: bool
+    target_active_stems: Set[str]
+    requested_stems: Set[str] = field(default_factory=set)
+    remaining_stems: List[str] = field(default_factory=list)
+    completed_cache: Dict[str, np.ndarray] = field(default_factory=dict)
+    mix_data: Optional[np.ndarray] = None
+    mix_pending: bool = False
+    cancelled: bool = False
+    current_task: Optional[str] = None
+
+    def total_items(self) -> int:
+        total = len(self.requested_stems)
+        if self.include_mix:
+            total += 1
+        return max(total, 0)
+
+    def completed_items(self) -> int:
+        completed = len(self.requested_stems & set(self.completed_cache.keys()))
+        if self.include_mix and self.mix_data is not None:
+            completed += 1
+        return completed
 
 
 class SimpleReverb:
@@ -122,6 +152,9 @@ class AudioSession:
         self.pending_ready: bool = False
         self._pending_generation: int = 0  # to discard stale builds
         self._pending_lock = threading.Lock()
+        self._pending_condition = threading.Condition(self._pending_lock)
+        self._render_plan: Optional["RenderPlan"] = None
+        self._render_thread: Optional[threading.Thread] = None
 
         # Envelopes for UI (built from ORIGINAL audio only)
         self.stem_envelopes: Dict[str, List[float]] = {}
@@ -281,6 +314,8 @@ class AudioSession:
             self.pending_total_samples = 0
             self.pending_ready = False
             self._pending_generation = 0
+            self._render_plan = None
+            self._render_thread = None
 
     # -------------------------------------------------------------------------
     # ENVELOPES (from ORIGINAL audio)
@@ -391,130 +426,119 @@ class AudioSession:
         if self.sample_rate is None:
             return
 
-        stems_to_build = set(stems_to_build)
+        stems_to_build = {name for name in stems_to_build if name in self.original_stem_data}
         include_mix = bool(include_mix) and self.original_mix is not None
 
         if not stems_to_build and not include_mix:
             return
 
-        def worker(generation: int):
-            try:
-                def is_stale() -> bool:
-                    with self._pending_lock:
-                        return generation != self._pending_generation
+        base_completed = dict(base_stems)
+        base_mix_value = base_mix
 
-                def abort_if_stale() -> bool:
-                    if is_stale():
-                        if log_callback:
-                            log_callback("Tempo/pitch rebuild superseded; aborting current job.")
-                        return True
-                    return False
-
-                if log_callback:
-                    log_callback(
-                        f"Rebuilding audio for tempo={tempo_rate:.2f}x, "
-                        f"pitch={pitch_semitones:+.1f} st..."
-                    )
-
-                total_items = len(stems_to_build) + (1 if include_mix else 0)
-                completed = 0
-
-                sr = self.sample_rate
-                if sr is None:
-                    return
-
-                new_stems: Dict[str, np.ndarray] = dict(base_stems)
-                for name in stems_to_build:
-                    if abort_if_stale():
-                        return
-                    orig = self.original_stem_data.get(name)
-                    if orig is None:
-                        continue
-                    if progress_callback:
-                        progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"{name}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
-                            total_items,
-                        )
-                    new_stems[name] = self._apply_tempo_pitch(
-                        data=orig,
-                        tempo_rate=tempo_rate,
-                        pitch_semitones=pitch_semitones,
-                        sr=sr,
-                    )
-                    completed += 1
-
-                new_mix = base_mix
-                if include_mix and self.original_mix is not None:
-                    if abort_if_stale():
-                        return
-                    if progress_callback:
-                        progress_callback(
-                            completed / float(max(total_items, 1)),
-                            f"mix, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
-                            total_items,
-                        )
-                    new_mix = self._apply_tempo_pitch(
-                        data=self.original_mix,
-                        tempo_rate=tempo_rate,
-                        pitch_semitones=pitch_semitones,
-                        sr=sr,
-                    )
-                    completed += 1
-
-                if abort_if_stale():
-                    return
-
-                new_total_samples = self._compute_total_samples(new_stems, new_mix)
-                new_missing = (
-                    set(self.original_stem_data.keys()) - set(new_stems.keys())
-                    if mark_missing
-                    else set()
-                )
-
-                with self._pending_lock:
-                    if generation != self._pending_generation:
-                        return
-
-                    self.pending_stem_data = new_stems
-                    self.pending_mix_data = new_mix
-                    self.pending_tempo_rate = tempo_rate
-                    self.pending_pitch_semitones = pitch_semitones
-                    self.pending_total_samples = new_total_samples
-                    self.pending_missing_stems = new_missing
-                    self.pending_ready = True
-
-                if log_callback:
-                    log_callback("New tempo/pitch configuration ready.")
-
-                if progress_callback:
-                    progress_callback(1.0, "", total_items)
-
-            except Exception as e:
-                if log_callback:
-                    log_callback(f"Error rebuilding audio for new tempo/pitch: {e}")
-
-        with self._pending_lock:
+        with self._pending_condition:
             self._pending_generation += 1
             generation = self._pending_generation
+            target_play_all = self.play_all if target_play_all is None else bool(target_play_all)
+            target_active = (
+                set(self.active_stems)
+                if target_active_stems is None
+                else set(target_active_stems)
+            )
+
+            compatible_plan = (
+                self._render_plan
+                and not self._render_plan.cancelled
+                and abs(self._render_plan.tempo_rate - tempo_rate) < 1e-6
+                and abs(self._render_plan.pitch_semitones - pitch_semitones) < 1e-6
+            )
+
+            if compatible_plan:
+                dropping_current = (
+                    self._render_plan.current_task
+                    and self._render_plan.current_task != "__mix__"
+                    and self._render_plan.current_task not in stems_to_build
+                )
+                switching_to_mix_only = (
+                    include_mix and not stems_to_build and not self._render_plan.include_mix
+                )
+                if dropping_current or switching_to_mix_only:
+                    base_completed.update(self._render_plan.completed_cache)
+                    if self._render_plan.mix_data is not None:
+                        base_mix_value = self._render_plan.mix_data
+                    self._render_plan.cancelled = True
+                    compatible_plan = False
+
+            if compatible_plan:
+                plan = self._render_plan
+                plan.target_play_all = target_play_all
+                plan.target_active_stems = target_active
+                plan.include_mix = include_mix
+                plan.mark_missing = mark_missing
+                plan.requested_stems = set(stems_to_build)
+                plan.remaining_stems = [
+                    name for name in plan.remaining_stems if name in plan.requested_stems
+                ]
+                known = set(plan.completed_cache.keys()) | set(plan.remaining_stems)
+                for name in stems_to_build:
+                    if name not in known:
+                        plan.remaining_stems.append(name)
+                if include_mix:
+                    plan.mix_pending = plan.mix_data is None
+                else:
+                    plan.mix_pending = False
+                self.pending_target_play_all = target_play_all
+                self.pending_target_active_stems = set(target_active)
+                self.pending_tempo_rate = tempo_rate
+                self.pending_pitch_semitones = pitch_semitones
+                if progress_callback and plan.current_task:
+                    progress_callback(
+                        plan.completed_items() / float(max(plan.total_items(), 1)),
+                        f"{plan.current_task}, {tempo_rate:.2f}x, {pitch_semitones:+.1f} st",
+                        plan.total_items(),
+                    )
+                self._pending_condition.notify_all()
+                return
+
+            if self._render_plan is not None:
+                self._render_plan.cancelled = True
+
             self.pending_ready = False
             self.pending_tempo_rate = tempo_rate
             self.pending_pitch_semitones = pitch_semitones
-            self.pending_target_play_all = (
-                self.play_all if target_play_all is None else bool(target_play_all)
-            )
-            self.pending_target_active_stems = set(
-                self.active_stems
-                if target_active_stems is None
-                else target_active_stems
-            )
+            self.pending_target_play_all = target_play_all
+            self.pending_target_active_stems = target_active
 
-        thread = threading.Thread(target=worker, args=(generation,), daemon=True)
-        thread.start()
+            plan = RenderPlan(
+                tempo_rate=tempo_rate,
+                pitch_semitones=pitch_semitones,
+                include_mix=include_mix,
+                mark_missing=mark_missing,
+                target_play_all=target_play_all,
+                target_active_stems=target_active,
+                requested_stems=set(stems_to_build),
+                remaining_stems=[name for name in stems_to_build if name not in base_completed],
+                completed_cache=base_completed,
+                mix_data=base_mix_value,
+                mix_pending=include_mix and base_mix_value is None,
+            )
+            self._render_plan = plan
+
+            if log_callback:
+                log_callback(
+                    f"Rebuilding audio for tempo={tempo_rate:.2f}x, "
+                    f"pitch={pitch_semitones:+.1f} st..."
+                )
+
+            self._render_thread = threading.Thread(
+                target=self._run_render_plan,
+                args=(plan, progress_callback, log_callback),
+                daemon=True,
+            )
+            self._render_thread.start()
 
     def cancel_pending_render(self):
         """Abort any in-flight render tasks and clear pending buffers."""
-        with self._pending_lock:
+        with self._pending_condition:
             self._pending_generation += 1
             self.pending_ready = False
             self.pending_stem_data = {}
@@ -525,6 +549,11 @@ class AudioSession:
             self.pending_pitch_semitones = self.pitch_semitones
             self.pending_target_play_all = self.play_all
             self.pending_target_active_stems = set(self.active_stems)
+            if self._render_plan is not None:
+                self._render_plan.cancelled = True
+            self._render_plan = None
+            self._render_thread = None
+            self._pending_condition.notify_all()
 
     def reset_to_original_mix(self, current_position_seconds: Optional[float] = None) -> Optional[int]:
         """
@@ -651,6 +680,127 @@ class AudioSession:
                 raise RuntimeError("Cannot build reverb without sample rate")
             self.reverb_states[name] = SimpleReverb(self.sample_rate)
         return self.reverb_states[name]
+
+    def _emit_plan_progress(
+        self,
+        plan: RenderPlan,
+        progress_callback,
+        label_name: str,
+    ):
+        if not progress_callback:
+            return
+
+        total_items = max(plan.total_items(), 1)
+        progress_callback(
+            plan.completed_items() / float(total_items),
+            f"{label_name}, {plan.tempo_rate:.2f}x, {plan.pitch_semitones:+.1f} st",
+            total_items,
+        )
+
+    def _run_render_plan(self, plan: RenderPlan, progress_callback, log_callback):
+        while True:
+            with self._pending_condition:
+                if plan.cancelled or self._render_plan is not plan:
+                    return
+
+                total_items = plan.total_items()
+                completed_items = plan.completed_items()
+
+                if plan.remaining_stems:
+                    task = plan.remaining_stems.pop(0)
+                    plan.current_task = task
+                elif plan.mix_pending and plan.include_mix:
+                    plan.current_task = "__mix__"
+                    plan.mix_pending = False
+                else:
+                    if completed_items >= total_items or total_items == 0:
+                        self._finalize_render_plan(plan, progress_callback, log_callback)
+                        return
+                    plan.current_task = None
+                    self._pending_condition.wait()
+                    continue
+
+                current_label = "mix" if plan.current_task == "__mix__" else plan.current_task
+                self._emit_plan_progress(plan, progress_callback, current_label)
+
+            sr = self.sample_rate
+            if sr is None:
+                return
+
+            if plan.current_task == "__mix__":
+                processed = None
+                if self.original_mix is not None:
+                    processed = self._apply_tempo_pitch(
+                        data=self.original_mix,
+                        tempo_rate=plan.tempo_rate,
+                        pitch_semitones=plan.pitch_semitones,
+                        sr=sr,
+                    )
+            else:
+                orig = self.original_stem_data.get(plan.current_task)
+                processed = None
+                if orig is not None:
+                    processed = self._apply_tempo_pitch(
+                        data=orig,
+                        tempo_rate=plan.tempo_rate,
+                        pitch_semitones=plan.pitch_semitones,
+                        sr=sr,
+                    )
+
+            with self._pending_condition:
+                if plan.cancelled or self._render_plan is not plan:
+                    return
+
+                if plan.current_task == "__mix__":
+                    plan.mix_data = processed
+                elif plan.current_task:
+                    if processed is not None:
+                        plan.completed_cache[plan.current_task] = processed
+                plan.current_task = None
+
+                if plan.completed_items() >= plan.total_items():
+                    self._finalize_render_plan(plan, progress_callback, log_callback)
+                    return
+
+                self._pending_condition.notify_all()
+
+    def _finalize_render_plan(
+        self, plan: RenderPlan, progress_callback, log_callback
+    ):
+        new_stems = {
+            name: data
+            for name, data in plan.completed_cache.items()
+            if name in plan.requested_stems
+        }
+        new_mix = plan.mix_data if plan.include_mix else None
+
+        missing = (
+            plan.requested_stems - set(new_stems.keys()) if plan.mark_missing else set()
+        )
+        if plan.include_mix and new_mix is None and plan.mark_missing:
+            missing = set(missing)
+
+        new_total_samples = self._compute_total_samples(new_stems, new_mix)
+
+        self.pending_stem_data = new_stems
+        self.pending_mix_data = new_mix
+        self.pending_tempo_rate = plan.tempo_rate
+        self.pending_pitch_semitones = plan.pitch_semitones
+        self.pending_total_samples = new_total_samples
+        self.pending_missing_stems = missing
+        self.pending_target_play_all = plan.target_play_all
+        self.pending_target_active_stems = set(plan.target_active_stems)
+        self.pending_ready = True
+
+        if log_callback:
+            log_callback("New tempo/pitch configuration ready.")
+
+        if progress_callback:
+            progress_callback(1.0, "", plan.total_items())
+
+        plan.cancelled = True
+        self._render_plan = None
+        self._render_thread = None
 
     def request_tempo_pitch_change(
         self,
