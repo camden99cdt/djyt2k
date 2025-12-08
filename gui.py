@@ -63,6 +63,9 @@ class YTDemucsApp:
             anchor="center",
             justify="center",
         )
+        self.style.configure("HighBand.TCheckbutton", foreground="#d4b000")
+        self.style.configure("MidBand.TCheckbutton", foreground="#1e9c5f")
+        self.style.configure("LowBand.TCheckbutton", foreground="#0d6fb8")
 
         # Widgets toggled by playback enable/disable state
         self.playback_control_widgets: list[tk.Widget] = []
@@ -263,6 +266,45 @@ class YTDemucsApp:
         self.gain_slider.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(6, 6))
         self.gain_slider.bind("<ButtonRelease-1>", self.on_gain_release)
 
+        band_cut_frame = ttk.Frame(gain_frame)
+        band_cut_frame.grid(row=2, column=0, columnspan=2, pady=(6, 0))
+        for idx in range(3):
+            band_cut_frame.columnconfigure(idx, weight=1)
+
+        self.high_band_var = tk.BooleanVar(value=False)
+        self.mid_band_var = tk.BooleanVar(value=False)
+        self.low_band_var = tk.BooleanVar(value=False)
+
+        self.high_band_checkbutton = ttk.Checkbutton(
+            band_cut_frame,
+            text="High",
+            variable=self.high_band_var,
+            width=1,
+            style="HighBand.TCheckbutton",
+        )
+        self.high_band_checkbutton.grid(row=0, column=0, sticky="w", padx=(0, 4))
+
+        self.mid_band_checkbutton = ttk.Checkbutton(
+            band_cut_frame,
+            text="Mid",
+            variable=self.mid_band_var,
+            width=1,
+            style="MidBand.TCheckbutton",
+        )
+        self.mid_band_checkbutton.grid(row=0, column=1, sticky="w")
+
+        self.low_band_checkbutton = ttk.Checkbutton(
+            band_cut_frame,
+            text="Low",
+            variable=self.low_band_var,
+            width=1,
+            style="LowBand.TCheckbutton",
+        )
+        self.low_band_checkbutton.grid(row=0, column=2, sticky="w", padx=(4, 0))
+
+        self.band_cut_label = ttk.Label(band_cut_frame, text="Cut")
+        self.band_cut_label.grid(row=1, column=0, columnspan=3, pady=(4, 0))
+
         ttk.Separator(right_top, orient="vertical").grid(
             row=0, column=1, sticky="ns", padx=10
         )
@@ -443,6 +485,9 @@ class YTDemucsApp:
                 self.loop_end_current_btn,
                 self.loop_end_forward_btn,
                 self.reset_loop_button,
+                self.high_band_checkbutton,
+                self.mid_band_checkbutton,
+                self.low_band_checkbutton,
             ]
         )
         self.playback_label_widgets.extend(
@@ -454,6 +499,7 @@ class YTDemucsApp:
                 self.loop_title_label,
                 self.loop_start_value_label,
                 self.loop_end_value_label,
+                self.band_cut_label,
             ]
         )
         self.playback_label_widgets.extend(self.key_table_headers)
@@ -1571,10 +1617,17 @@ class YTDemucsApp:
             self.reverb_checkbox,
             self.reverb_mix_slider,
             self.play_from_loop_checkbox,
+            self.crossfade_checkbox,
             self.loop_start_back_btn,
+            self.loop_start_current_btn,
             self.loop_start_forward_btn,
             self.loop_end_back_btn,
+            self.loop_end_current_btn,
             self.loop_end_forward_btn,
+            self.reset_loop_button,
+            self.high_band_checkbutton,
+            self.mid_band_checkbutton,
+            self.low_band_checkbutton,
         ]
         self.playback_label_widgets = [
             self.audio_meter_label,
@@ -1584,6 +1637,7 @@ class YTDemucsApp:
             self.loop_title_label,
             self.loop_start_value_label,
             self.loop_end_value_label,
+            self.band_cut_label,
         ]
         self.playback_label_widgets.extend(self.key_table_headers)
         self.playback_label_widgets.extend(self.key_table_value_labels.values())
@@ -2214,6 +2268,11 @@ class YTDemucsApp:
         if self.crossfade_var is not None:
             self.crossfade_var.set(False)
         self.player.set_loop_crossfade_enabled(False)
+        for var in (self.high_band_var, self.mid_band_var, self.low_band_var):
+            try:
+                var.set(False)
+            except Exception:
+                pass
         self.audio_meter.configure(
             value=0.0, style=self.meter_style_names.get("normal", "")
         )
