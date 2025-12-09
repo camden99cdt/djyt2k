@@ -6,6 +6,7 @@ import urllib.request
 import uuid
 from datetime import datetime
 from io import BytesIO
+from typing import Callable
 
 import tkinter as tk
 import tkinter.font as tkfont
@@ -789,9 +790,8 @@ class YTDemucsApp:
 
         jams_bottom_row = ttk.Frame(self.jams_tab)
         jams_bottom_row.grid(row=2, column=0, sticky="ew")
-        jams_bottom_row.columnconfigure(0, weight=1)
-        jams_bottom_row.columnconfigure(1, weight=1)
-        jams_bottom_row.columnconfigure(2, weight=1)
+        for c in range(4):
+            jams_bottom_row.columnconfigure(c, weight=1)
 
         self.add_current_session_button = ttk.Button(
             jams_bottom_row,
@@ -801,13 +801,27 @@ class YTDemucsApp:
         )
         self.add_current_session_button.grid(row=0, column=0, sticky="w")
 
+        self.jam_loading_var = tk.StringVar(value="")
+        self.jam_loading_frame = ttk.Frame(jams_bottom_row)
+        self.jam_loading_frame.grid(row=0, column=1, sticky="ew")
+        self.jam_loading_frame.columnconfigure(1, weight=1)
+        self.jam_loading_bar = ttk.Progressbar(
+            self.jam_loading_frame, mode="indeterminate", length=120
+        )
+        self.jam_loading_bar.grid(row=0, column=0, padx=(0, 6))
+        self.jam_loading_label = ttk.Label(
+            self.jam_loading_frame, textvariable=self.jam_loading_var
+        )
+        self.jam_loading_label.grid(row=0, column=1, sticky="w")
+        self.hide_jam_loading()
+
         self.delete_jam_button = ttk.Button(
             jams_bottom_row,
             text="Delete Jam",
             command=self.on_delete_jam,
             state="disabled",
         )
-        self.delete_jam_button.grid(row=0, column=1, sticky="e")
+        self.delete_jam_button.grid(row=0, column=2, sticky="e")
 
         self.save_jam_button = ttk.Button(
             jams_bottom_row,
@@ -815,7 +829,7 @@ class YTDemucsApp:
             command=self.on_save_jam,
             state="disabled",
         )
-        self.save_jam_button.grid(row=0, column=2, sticky="e")
+        self.save_jam_button.grid(row=0, column=3, sticky="e")
 
         root.rowconfigure(0, weight=1)
         root.columnconfigure(0, weight=1)
@@ -842,6 +856,7 @@ class YTDemucsApp:
         self.active_jam_title: str | None = None
         self.active_jam_sessions: list[str] = []
         self.active_jam_dirty = False
+        self.jam_loading = False
         self.jam_dropdown_items: list[dict] = []
         self.jam_entry_images: list[ImageTk.PhotoImage] = []
         self.jam_widget_session_map: dict[tk.Widget, str] = {}
@@ -1567,7 +1582,9 @@ class YTDemucsApp:
         self.update_save_button_state()
         self.append_log(f"Renamed session: {session.display_name}")
 
-    def load_saved_session(self, session: SavedSession):
+    def load_saved_session(
+        self, session: SavedSession, on_complete: Callable[[bool], None] | None = None
+    ):
         self.append_log(f"Loading saved session: {session.display_name}")
         self.show_session_loading(f"Loading {session.title}...")
         self.clear_current_session()
@@ -1591,25 +1608,63 @@ class YTDemucsApp:
                     preloaded = self.player.load_audio(session.stems_dir, session.audio_path)
             except Exception as e:
                 self.append_log(f"Failed to load saved session: {e}")
-                self.root.after(0, self.hide_session_loading)
+                self.root.after(
+                    0, lambda: self._finish_session_load(False, on_complete)
+                )
                 return
 
-            def _finish():
-                window_title = session.title
-                self.root.title(window_title)
-                self.notebook.select(self.playback_tab)
-                self.setup_player(session.stems_dir, preloaded=preloaded)
-                self.update_key_table()
-                self.hide_session_loading()
-
-            self.root.after(0, _finish)
+            self.root.after(
+                0,
+                lambda: self._finish_session_load(
+                    True, on_complete, session=session, preloaded=preloaded
+                ),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_session_load(
+        self,
+        success: bool,
+        on_complete: Callable[[bool], None] | None = None,
+        session: SavedSession | None = None,
+        preloaded: tuple[list[str], dict[str, list[float]]] | None = None,
+    ):
+        if success and session and preloaded is not None:
+            window_title = session.title
+            self.root.title(window_title)
+            self.notebook.select(self.playback_tab)
+            self.setup_player(session.stems_dir, preloaded=preloaded)
+            self.update_key_table()
+        self.hide_session_loading()
+        if on_complete:
+            on_complete(success)
 
     # ---------- jams ----------
 
     def on_jam_canvas_configure(self, event):
         self.jam_canvas.itemconfigure(self.jam_canvas_window, width=event.width)
+        available_width = max(event.width, 1)
+        target_width = 260
+        new_columns = max(1, available_width // target_width)
+        if new_columns != self.jam_grid_columns:
+            self.jam_grid_columns = new_columns
+            self.render_active_jam_entries()
+
+    def show_jam_loading(self, message: str = "Loading session..."):
+        self.jam_loading = True
+        self.jam_loading_var.set(message)
+        self.jam_loading_frame.grid()
+        self.jam_loading_bar.start(10)
+        if hasattr(self, "active_jam_title"):
+            self.update_jam_controls_state()
+
+    def hide_jam_loading(self):
+        self.jam_loading = False
+        self.jam_loading_var.set("")
+        self.jam_loading_bar.stop()
+        self.jam_loading_frame.grid_remove()
+        if hasattr(self, "active_jam_title"):
+            self.update_jam_controls_state()
 
     def reset_jam_dropdown_selection(self):
         self.jam_dropdown_var.set("Load Jams ...")
@@ -1713,13 +1768,31 @@ class YTDemucsApp:
 
         for widget, enabled in [
             (self.add_current_session_button, has_session and jam_exists),
-            (self.save_jam_button, jam_exists),
-            (self.delete_jam_button, jam_saved or self.active_jam_sessions),
+            (
+                self.delete_jam_button,
+                (jam_saved or self.active_jam_sessions) and not self.jam_loading,
+            ),
         ]:
             try:
-                widget.state(["!disabled"] if enabled else ["disabled"])
+                widget.state(["!disabled"] if enabled and not self.jam_loading else ["disabled"])
             except Exception:
-                widget.configure(state="normal" if enabled else "disabled")
+                widget.configure(
+                    state="normal"
+                    if enabled and not self.jam_loading
+                    else "disabled"
+                )
+
+        save_text = "Save Jam"
+        save_enabled = jam_exists and self.active_jam_dirty and not self.jam_loading
+        if jam_exists and not self.active_jam_dirty:
+            save_text = "Saved"
+        try:
+            self.save_jam_button.configure(text=save_text)
+            self.save_jam_button.state(["!disabled"] if save_enabled else ["disabled"])
+        except Exception:
+            self.save_jam_button.configure(
+                text=save_text, state="normal" if save_enabled else "disabled"
+            )
 
     def render_active_jam_entries(self):
         for child in self.jam_grid_frame.winfo_children():
@@ -1821,8 +1894,15 @@ class YTDemucsApp:
     def on_jam_entry_double_click(self, session_id: str):
         session = self.saved_session_store.get_session(session_id)
         if session:
-            self.notebook.select(self.playback_tab)
-            self.load_saved_session(session)
+            self.show_jam_loading("Loading session...")
+            self.load_saved_session(
+                session, on_complete=self.on_jam_session_loaded_from_jam
+            )
+
+    def on_jam_session_loaded_from_jam(self, success: bool):
+        self.hide_jam_loading()
+        if not success:
+            messagebox.showerror("Load Jam Session", "Failed to load the session.")
 
     def on_jam_entry_right_click(self, session_id: str):
         if session_id in self.active_jam_sessions:
