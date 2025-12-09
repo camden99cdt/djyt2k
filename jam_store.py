@@ -38,17 +38,20 @@ class JamStore:
         self.index_path = os.path.join(self.base_dir, "jams.json")
         os.makedirs(self.base_dir, exist_ok=True)
         self.jams: List[Jam] = []
+        self._last_mtime: float | None = None
         self._load_jams()
 
     def _load_jams(self):
         if not os.path.exists(self.index_path):
             self.jams = []
+            self._last_mtime = None
             return
         try:
             with open(self.index_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
             self.jams = []
+            self._last_mtime = None
             return
 
         jams: List[Jam] = []
@@ -59,12 +62,20 @@ class JamStore:
                 continue
             jams.append(jam)
         self.jams = jams
+        try:
+            self._last_mtime = os.path.getmtime(self.index_path)
+        except Exception:
+            self._last_mtime = None
 
     def _write_jams(self):
         data = [j.to_dict() for j in self.jams]
         os.makedirs(self.base_dir, exist_ok=True)
         with open(self.index_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        try:
+            self._last_mtime = os.path.getmtime(self.index_path)
+        except Exception:
+            self._last_mtime = None
 
     def list_jams(self) -> List[Jam]:
         return list(self.jams)
@@ -101,3 +112,23 @@ class JamStore:
         self.jams = [j for j in self.jams if j.jam_id != jam_id]
         self._write_jams()
         return True
+
+    def reload_if_changed(self) -> bool:
+        """Reload jams from disk if the backing file changed."""
+
+        try:
+            mtime = os.path.getmtime(self.index_path)
+        except Exception:
+            mtime = None
+
+        if mtime is None:
+            if self.jams:
+                self.jams = []
+                self._last_mtime = None
+                return True
+            return False
+
+        if self._last_mtime is None or mtime > self._last_mtime:
+            self._load_jams()
+            return True
+        return False

@@ -782,6 +782,10 @@ class YTDemucsApp:
         self.jam_canvas_window = self.jam_canvas.create_window(
             (0, 0), window=self.jam_grid_frame, anchor="nw"
         )
+        for widget in (self.jam_canvas, self.jam_grid_frame):
+            widget.bind("<MouseWheel>", self.on_jam_mousewheel)
+            widget.bind("<Button-4>", self.on_jam_mousewheel)
+            widget.bind("<Button-5>", self.on_jam_mousewheel)
         self.jam_grid_frame.bind(
             "<Configure>",
             lambda _e: self.jam_canvas.configure(scrollregion=self.jam_canvas.bbox("all")),
@@ -947,6 +951,8 @@ class YTDemucsApp:
 
         # url entry bindings
         self.search_controller.bind_entry_events()
+
+        self.root.after(2000, self.poll_jam_store_changes)
 
         self.update_player_frame_visibility()
 
@@ -1583,7 +1589,10 @@ class YTDemucsApp:
         self.append_log(f"Renamed session: {session.display_name}")
 
     def load_saved_session(
-        self, session: SavedSession, on_complete: Callable[[bool], None] | None = None
+        self,
+        session: SavedSession,
+        on_complete: Callable[[bool], None] | None = None,
+        switch_to_playback: bool = True,
     ):
         self.append_log(f"Loading saved session: {session.display_name}")
         self.show_session_loading(f"Loading {session.title}...")
@@ -1609,14 +1618,21 @@ class YTDemucsApp:
             except Exception as e:
                 self.append_log(f"Failed to load saved session: {e}")
                 self.root.after(
-                    0, lambda: self._finish_session_load(False, on_complete)
+                    0,
+                    lambda: self._finish_session_load(
+                        False, on_complete, switch_to_playback=switch_to_playback
+                    ),
                 )
                 return
 
             self.root.after(
                 0,
                 lambda: self._finish_session_load(
-                    True, on_complete, session=session, preloaded=preloaded
+                    True,
+                    on_complete,
+                    session=session,
+                    preloaded=preloaded,
+                    switch_to_playback=switch_to_playback,
                 ),
             )
 
@@ -1628,11 +1644,13 @@ class YTDemucsApp:
         on_complete: Callable[[bool], None] | None = None,
         session: SavedSession | None = None,
         preloaded: tuple[list[str], dict[str, list[float]]] | None = None,
+        switch_to_playback: bool = True,
     ):
         if success and session and preloaded is not None:
             window_title = session.title
             self.root.title(window_title)
-            self.notebook.select(self.playback_tab)
+            if switch_to_playback:
+                self.notebook.select(self.playback_tab)
             self.setup_player(session.stems_dir, preloaded=preloaded)
             self.update_key_table()
         self.hide_session_loading()
@@ -1649,6 +1667,16 @@ class YTDemucsApp:
         if new_columns != self.jam_grid_columns:
             self.jam_grid_columns = new_columns
             self.render_active_jam_entries()
+
+    def on_jam_mousewheel(self, event):
+        if event.num == 4:
+            delta = 1
+        elif event.num == 5:
+            delta = -1
+        else:
+            delta = event.delta / 120 if event.delta else 0
+        if delta:
+            self.jam_canvas.yview_scroll(int(-delta), "units")
 
     def show_jam_loading(self, message: str = "Loading session..."):
         self.jam_loading = True
@@ -1674,6 +1702,7 @@ class YTDemucsApp:
             pass
 
     def refresh_jam_dropdown(self, select_id: str | None = None):
+        self.jam_store.reload_if_changed()
         items: list[dict] = [
             {"label": "New Jam", "type": "new"},
             {"label": "──────────", "type": "divider"},
@@ -1708,6 +1737,24 @@ class YTDemucsApp:
                     return
 
         self.reset_jam_dropdown_selection()
+
+    def poll_jam_store_changes(self):
+        if self.jam_store.reload_if_changed():
+            self.refresh_jam_dropdown()
+            if self.active_jam_id:
+                jam = self.jam_store.get_jam(self.active_jam_id)
+                if jam:
+                    if not self.active_jam_dirty:
+                        self.active_jam_title = jam.title
+                        self.active_jam_sessions = list(jam.session_ids)
+                        self.render_active_jam_entries()
+                    else:
+                        self.refresh_jam_dropdown(select_id=self.active_jam_id)
+                else:
+                    self.clear_active_jam()
+            self.update_jam_controls_state()
+
+        self.root.after(2000, self.poll_jam_store_changes)
 
     def on_jam_dropdown_selected(self, _event=None):
         idx = self.jam_dropdown.current()
@@ -1896,11 +1943,15 @@ class YTDemucsApp:
         if session:
             self.show_jam_loading("Loading session...")
             self.load_saved_session(
-                session, on_complete=self.on_jam_session_loaded_from_jam
+                session,
+                on_complete=self.on_jam_session_loaded_from_jam,
+                switch_to_playback=False,
             )
 
     def on_jam_session_loaded_from_jam(self, success: bool):
         self.hide_jam_loading()
+        if success:
+            self.notebook.select(self.playback_tab)
         if not success:
             messagebox.showerror("Load Jam Session", "Failed to load the session.")
 
