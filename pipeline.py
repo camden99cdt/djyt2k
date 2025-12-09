@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional
@@ -59,17 +58,15 @@ class PipelineRunner:
 
             audio_path = self._download_audio(url, session_dir)
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                key_future = executor.submit(self._detect_song_key, audio_path)
-                stems_future = None
+            # Stagger heavy CPU work (Demucs + key detection) so the audio callback
+            # is less likely to starve while a new track is loading.
+            stems_dir = None
+            if not skip_separation:
+                stems_dir = self._maybe_separate(skip_separation, audio_path, session_dir)
 
-                if not skip_separation:
-                    stems_future = executor.submit(
-                        self._maybe_separate, skip_separation, audio_path, session_dir
-                    )
-
-                song_key_text = key_future.result()
-                stems_dir = stems_future.result() if stems_future else None
+            # Run key detection after separation to avoid overlapping CPU spikes.
+            # This still executes off the UI thread via run_pipeline's worker thread.
+            song_key_text = self._detect_song_key(audio_path)
 
             result = PipelineResult(
                 title=title,
