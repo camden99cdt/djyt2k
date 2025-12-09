@@ -1,14 +1,17 @@
 # gui.py
 import math
+import textwrap
 import os
 import threading
 import urllib.request
+import uuid
 from datetime import datetime
 from io import BytesIO
+from typing import Callable
 
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
 from PIL import Image, ImageTk
 
@@ -16,6 +19,7 @@ from audio_player import StemAudioPlayer
 from pipeline import PipelineResult, PipelineRunner
 from saved_sessions import SavedSession, SavedSessionStore
 from search_suggestion_controller import SearchSuggestionController
+from jam_store import Jam, JamStore
 
 CHROMA_LABELS = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -141,10 +145,12 @@ class YTDemucsApp:
         self.youtube_tab = ttk.Frame(self.notebook, padding=10)
         self.playback_tab = ttk.Frame(self.notebook, padding=10)
         self.sessions_tab = ttk.Frame(self.notebook, padding=10)
+        self.jams_tab = ttk.Frame(self.notebook, padding=10)
 
         self.notebook.add(self.youtube_tab, text="YouTube")
         self.notebook.add(self.playback_tab, text="Playback")
         self.notebook.add(self.sessions_tab, text="Sessions")
+        self.notebook.add(self.jams_tab, text="Jams")
 
         ttk.Label(self.youtube_tab, text="YouTube URL:").grid(row=0, column=0, sticky="w")
         self.url_var = tk.StringVar()
@@ -742,6 +748,94 @@ class YTDemucsApp:
         )
         self.save_delete_button.grid(row=13, column=0, sticky="ew", pady=(10, 0))
 
+        # jams tab layout
+        self.jams_tab.rowconfigure(1, weight=1)
+        self.jams_tab.columnconfigure(0, weight=1)
+
+        jams_top_row = ttk.Frame(self.jams_tab)
+        jams_top_row.grid(row=0, column=0, sticky="ew")
+        jams_top_row.columnconfigure(0, weight=1)
+
+        self.jam_dropdown_var = tk.StringVar(value="Load Jams ...")
+        self.jam_dropdown = ttk.Combobox(
+            jams_top_row,
+            state="readonly",
+            textvariable=self.jam_dropdown_var,
+            values=[],
+        )
+        self.jam_dropdown.grid(row=0, column=0, sticky="ew")
+        self.jam_dropdown.bind("<<ComboboxSelected>>", self.on_jam_dropdown_selected)
+
+        jams_grid_container = ttk.Frame(self.jams_tab)
+        jams_grid_container.grid(row=1, column=0, sticky="nsew", pady=10)
+        jams_grid_container.columnconfigure(0, weight=1)
+        jams_grid_container.rowconfigure(0, weight=1)
+
+        self.jam_canvas = tk.Canvas(jams_grid_container, highlightthickness=0)
+        jam_scrollbar = ttk.Scrollbar(
+            jams_grid_container, orient="vertical", command=self.jam_canvas.yview
+        )
+        self.jam_canvas.configure(yscrollcommand=jam_scrollbar.set)
+        self.jam_canvas.grid(row=0, column=0, sticky="nsew")
+        jam_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        self.jam_grid_frame = ttk.Frame(self.jam_canvas)
+        self.jam_canvas_window = self.jam_canvas.create_window(
+            (0, 0), window=self.jam_grid_frame, anchor="nw"
+        )
+        for widget in (self.jam_canvas, self.jam_grid_frame):
+            widget.bind("<MouseWheel>", self.on_jam_mousewheel)
+            widget.bind("<Button-4>", self.on_jam_mousewheel)
+            widget.bind("<Button-5>", self.on_jam_mousewheel)
+        self.jam_grid_frame.bind(
+            "<Configure>",
+            lambda _e: self.jam_canvas.configure(scrollregion=self.jam_canvas.bbox("all")),
+        )
+        self.jam_canvas.bind("<Configure>", self.on_jam_canvas_configure)
+
+        jams_bottom_row = ttk.Frame(self.jams_tab)
+        jams_bottom_row.grid(row=2, column=0, sticky="ew")
+        for c in range(4):
+            jams_bottom_row.columnconfigure(c, weight=1)
+
+        self.add_current_session_button = ttk.Button(
+            jams_bottom_row,
+            text="Add Current Session",
+            command=self.on_add_current_session_to_jam,
+            state="disabled",
+        )
+        self.add_current_session_button.grid(row=0, column=0, sticky="w")
+
+        self.jam_loading_var = tk.StringVar(value="")
+        self.jam_loading_frame = ttk.Frame(jams_bottom_row)
+        self.jam_loading_frame.grid(row=0, column=1, sticky="ew")
+        self.jam_loading_frame.columnconfigure(1, weight=1)
+        self.jam_loading_bar = ttk.Progressbar(
+            self.jam_loading_frame, mode="indeterminate", length=120
+        )
+        self.jam_loading_bar.grid(row=0, column=0, padx=(0, 6))
+        self.jam_loading_label = ttk.Label(
+            self.jam_loading_frame, textvariable=self.jam_loading_var
+        )
+        self.jam_loading_label.grid(row=0, column=1, sticky="w")
+        self.hide_jam_loading()
+
+        self.delete_jam_button = ttk.Button(
+            jams_bottom_row,
+            text="Delete Jam",
+            command=self.on_delete_jam,
+            state="disabled",
+        )
+        self.delete_jam_button.grid(row=0, column=2, sticky="e")
+
+        self.save_jam_button = ttk.Button(
+            jams_bottom_row,
+            text="Save Jam",
+            command=self.on_save_jam,
+            state="disabled",
+        )
+        self.save_jam_button.grid(row=0, column=3, sticky="e")
+
         root.rowconfigure(0, weight=1)
         root.columnconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
@@ -762,6 +856,19 @@ class YTDemucsApp:
         self.current_pipeline_result: PipelineResult | None = None
         self.thumbnail_image = None
         self.current_thumbnail_bytes: bytes | None = None
+
+        self.jam_store = JamStore()
+        self.active_jam_id: str | None = None
+        self.active_jam_title: str | None = None
+        self.active_jam_sessions: list[str] = []
+        self.active_jam_dirty = False
+        self.jam_loading = False
+        self.jam_dropdown_items: list[dict] = []
+        self.jam_entry_images: list[ImageTk.PhotoImage] = []
+        self.jam_widget_session_map: dict[tk.Widget, str] = {}
+        self.jam_drag_start_id: str | None = None
+        self.jam_grid_columns = 3
+        self.jam_entry_title_max_px = 240
 
         self.wave_canvas: tk.Canvas | None = None
         self.wave_cursor_id: int | None = None
@@ -842,8 +949,14 @@ class YTDemucsApp:
         self.hide_session_loading()
         self.poll_saved_sessions_store()
 
+        self.refresh_jam_dropdown()
+        self.render_active_jam_entries()
+        self.update_jam_controls_state()
+
         # url entry bindings
         self.search_controller.bind_entry_events()
+
+        self.root.after(2000, self.poll_jam_store_changes)
 
         self.update_player_frame_visibility()
 
@@ -1493,7 +1606,12 @@ class YTDemucsApp:
         self.update_save_button_state()
         self.append_log(f"Renamed session: {session.display_name}")
 
-    def load_saved_session(self, session: SavedSession):
+    def load_saved_session(
+        self,
+        session: SavedSession,
+        on_complete: Callable[[bool], None] | None = None,
+        switch_to_playback: bool = True,
+    ):
         self.append_log(f"Loading saved session: {session.display_name}")
         self.show_session_loading(f"Loading {session.title}...")
         self.clear_current_session()
@@ -1517,20 +1635,464 @@ class YTDemucsApp:
                     preloaded = self.player.load_audio(session.stems_dir, session.audio_path)
             except Exception as e:
                 self.append_log(f"Failed to load saved session: {e}")
-                self.root.after(0, self.hide_session_loading)
+                self.root.after(
+                    0,
+                    lambda: self._finish_session_load(
+                        False, on_complete, switch_to_playback=switch_to_playback
+                    ),
+                )
                 return
 
-            def _finish():
-                window_title = session.title
-                self.root.title(window_title)
-                self.notebook.select(self.playback_tab)
-                self.setup_player(session.stems_dir, preloaded=preloaded)
-                self.update_key_table()
-                self.hide_session_loading()
-
-            self.root.after(0, _finish)
+            self.root.after(
+                0,
+                lambda: self._finish_session_load(
+                    True,
+                    on_complete,
+                    session=session,
+                    preloaded=preloaded,
+                    switch_to_playback=switch_to_playback,
+                ),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_session_load(
+        self,
+        success: bool,
+        on_complete: Callable[[bool], None] | None = None,
+        session: SavedSession | None = None,
+        preloaded: tuple[list[str], dict[str, list[float]]] | None = None,
+        switch_to_playback: bool = True,
+    ):
+        if success and session and preloaded is not None:
+            window_title = session.title
+            self.root.title(window_title)
+            if switch_to_playback:
+                self.notebook.select(self.playback_tab)
+            self.setup_player(session.stems_dir, preloaded=preloaded)
+            self.update_key_table()
+        self.hide_session_loading()
+        if on_complete:
+            on_complete(success)
+
+    # ---------- jams ----------
+
+    def on_jam_canvas_configure(self, event):
+        self.jam_canvas.itemconfigure(self.jam_canvas_window, width=event.width)
+        available_width = max(event.width, 1)
+        target_width = 260
+        new_columns = max(1, available_width // target_width)
+        if new_columns != self.jam_grid_columns:
+            self.jam_grid_columns = new_columns
+            self.render_active_jam_entries()
+
+    def on_jam_mousewheel(self, event):
+        if event.num == 4:
+            delta = 1
+        elif event.num == 5:
+            delta = -1
+        else:
+            delta = event.delta / 120 if event.delta else 0
+        if delta:
+            self.jam_canvas.yview_scroll(int(-delta), "units")
+
+    def show_jam_loading(self, message: str = "Loading session..."):
+        self.jam_loading = True
+        self.jam_loading_var.set(message)
+        self.jam_loading_frame.grid()
+        self.jam_loading_bar.start(10)
+        if hasattr(self, "active_jam_title"):
+            self.update_jam_controls_state()
+
+    def hide_jam_loading(self):
+        self.jam_loading = False
+        self.jam_loading_var.set("")
+        self.jam_loading_bar.stop()
+        self.jam_loading_frame.grid_remove()
+        if hasattr(self, "active_jam_title"):
+            self.update_jam_controls_state()
+
+    def reset_jam_dropdown_selection(self):
+        self.jam_dropdown_var.set("Load Jams ...")
+        try:
+            self.jam_dropdown.set("Load Jams ...")
+        except Exception:
+            pass
+
+    def refresh_jam_dropdown(self, select_id: str | None = None):
+        self.jam_store.reload_if_changed()
+        items: list[dict] = [
+            {"label": "New Jam", "type": "new"},
+            {"label": "──────────", "type": "divider"},
+        ]
+        for jam in self.jam_store.list_jams():
+            items.append({"label": jam.title, "type": "jam", "jam_id": jam.jam_id})
+
+        if (
+            self.active_jam_id
+            and not any(i.get("jam_id") == self.active_jam_id for i in items)
+        ):
+            items.append(
+                {
+                    "label": self.active_jam_title or "Untitled Jam",
+                    "type": "jam",
+                    "jam_id": self.active_jam_id,
+                }
+            )
+
+        self.jam_dropdown_items = items
+        self.jam_dropdown.configure(values=[i["label"] for i in items])
+
+        if select_id:
+            for idx, item in enumerate(items):
+                if item.get("jam_id") == select_id:
+                    self.jam_dropdown.current(idx)
+                    return
+        elif self.active_jam_id:
+            for idx, item in enumerate(items):
+                if item.get("jam_id") == self.active_jam_id:
+                    self.jam_dropdown.current(idx)
+                    return
+
+        self.reset_jam_dropdown_selection()
+
+    def poll_jam_store_changes(self):
+        if self.jam_store.reload_if_changed():
+            self.refresh_jam_dropdown()
+            if self.active_jam_id:
+                jam = self.jam_store.get_jam(self.active_jam_id)
+                if jam:
+                    if not self.active_jam_dirty:
+                        self.active_jam_title = jam.title
+                        self.active_jam_sessions = list(jam.session_ids)
+                        self.render_active_jam_entries()
+                    else:
+                        self.refresh_jam_dropdown(select_id=self.active_jam_id)
+                else:
+                    self.clear_active_jam()
+            self.update_jam_controls_state()
+
+        self.root.after(2000, self.poll_jam_store_changes)
+
+    def on_jam_dropdown_selected(self, _event=None):
+        idx = self.jam_dropdown.current()
+        if idx < 0 or idx >= len(self.jam_dropdown_items):
+            return
+        item = self.jam_dropdown_items[idx]
+        if item["type"] == "divider":
+            self.reset_jam_dropdown_selection()
+            return
+        if item["type"] == "new":
+            self.create_new_jam()
+            return
+        jam_id = item.get("jam_id")
+        if not jam_id:
+            return
+        jam = self.jam_store.get_jam(jam_id)
+        if jam:
+            self.set_active_jam(jam)
+
+    def create_new_jam(self):
+        title = simpledialog.askstring(
+            "New Jam", "Enter a title for the new jam:", parent=self.root
+        )
+        if title is None:
+            self.reset_jam_dropdown_selection()
+            return
+        jam_id = uuid.uuid4().hex
+        self.active_jam_id = jam_id
+        self.active_jam_title = (title or "Untitled Jam").strip() or "Untitled Jam"
+        self.active_jam_sessions = []
+        self.active_jam_dirty = True
+        self.refresh_jam_dropdown(select_id=jam_id)
+        self.render_active_jam_entries()
+        self.update_jam_controls_state()
+
+    def set_active_jam(self, jam: Jam):
+        self.active_jam_id = jam.jam_id
+        self.active_jam_title = jam.title
+        self.active_jam_sessions = list(jam.session_ids)
+        self.active_jam_dirty = False
+        self.refresh_jam_dropdown(select_id=jam.jam_id)
+        self.render_active_jam_entries()
+        self.update_jam_controls_state()
+
+    def clear_active_jam(self):
+        self.active_jam_id = None
+        self.active_jam_title = None
+        self.active_jam_sessions = []
+        self.active_jam_dirty = False
+        self.reset_jam_dropdown_selection()
+        self.render_active_jam_entries()
+        self.update_jam_controls_state()
+
+    def update_jam_controls_state(self):
+        jam_exists = self.active_jam_title is not None
+        jam_saved = self.active_jam_id is not None
+        has_session = jam_exists and (self.has_active_session() or self.current_pipeline_result)
+
+        for widget, enabled in [
+            (self.add_current_session_button, has_session and jam_exists),
+            (
+                self.delete_jam_button,
+                (jam_saved or self.active_jam_sessions) and not self.jam_loading,
+            ),
+        ]:
+            try:
+                widget.state(["!disabled"] if enabled and not self.jam_loading else ["disabled"])
+            except Exception:
+                widget.configure(
+                    state="normal"
+                    if enabled and not self.jam_loading
+                    else "disabled"
+                )
+
+        save_text = "Save Jam"
+        save_enabled = jam_exists and self.active_jam_dirty and not self.jam_loading
+        if jam_exists and not self.active_jam_dirty:
+            save_text = "Saved"
+        try:
+            self.save_jam_button.configure(text=save_text)
+            self.save_jam_button.state(["!disabled"] if save_enabled else ["disabled"])
+        except Exception:
+            self.save_jam_button.configure(
+                text=save_text, state="normal" if save_enabled else "disabled"
+            )
+
+    def _truncate_title_for_jam_entry(
+        self, title: str, font: tkfont.Font, max_width_px: int
+    ) -> str:
+        ellipsis = "…"
+        if font.measure(title) <= max_width_px:
+            return title
+
+        trimmed = []
+        for ch in title:
+            test_text = "".join(trimmed) + ch + ellipsis
+            if font.measure(test_text) > max_width_px:
+                break
+            trimmed.append(ch)
+
+        if not trimmed:
+            return ellipsis
+
+        return "".join(trimmed) + ellipsis
+
+    def render_active_jam_entries(self):
+        for child in self.jam_grid_frame.winfo_children():
+            child.destroy()
+        self.jam_entry_images = []
+        self.jam_widget_session_map = {}
+
+        if not self.active_jam_title:
+            ttk.Label(
+                self.jam_grid_frame,
+                text="Select or create a jam to view its sessions.",
+                foreground="#666666",
+            ).grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            return
+
+        if not self.active_jam_sessions:
+            ttk.Label(
+                self.jam_grid_frame,
+                text="This jam is empty. Add sessions to get started.",
+                foreground="#666666",
+            ).grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            return
+
+        title_font = tkfont.nametofont("TkDefaultFont")
+
+        for idx, session_id in enumerate(self.active_jam_sessions):
+            session = self.saved_session_store.get_session(session_id)
+            row = idx // self.jam_grid_columns
+            col = idx % self.jam_grid_columns
+            frame = ttk.Frame(self.jam_grid_frame, padding=6, relief="groove")
+            frame.grid(row=row, column=col, padx=6, pady=6, sticky="n")
+
+            thumb_label = ttk.Label(frame)
+            thumb_label.grid(row=0, column=0)
+
+            title_text = "Missing session"
+            if session and session.title:
+                try:
+                    title_text = self._truncate_title_for_jam_entry(
+                        session.title, title_font, self.jam_entry_title_max_px
+                    )
+                except Exception:
+                    title_text = session.title
+
+            if session and session.thumbnail_path and os.path.exists(session.thumbnail_path):
+                try:
+                    image = Image.open(session.thumbnail_path)
+                    image.thumbnail((240, 135))
+                    photo = ImageTk.PhotoImage(image)
+                    self.jam_entry_images.append(photo)
+                    thumb_label.configure(image=photo)
+                except Exception:
+                    thumb_label.configure(text="No\nthumbnail")
+            else:
+                thumb_label.configure(text="No\nthumbnail")
+
+            title_label = ttk.Label(frame, text=title_text, justify="center")
+            title_label.grid(row=1, column=0, pady=(6, 0))
+
+            for bind_widget in (frame, thumb_label, title_label):
+                self.jam_widget_session_map[bind_widget] = session_id
+                bind_widget.bind(
+                    "<Double-Button-1>",
+                    lambda _e, sid=session_id: self.on_jam_entry_double_click(sid),
+                )
+                bind_widget.bind(
+                    "<Button-3>",
+                    lambda _e, sid=session_id: self.on_jam_entry_right_click(sid),
+                )
+                bind_widget.bind(
+                    "<ButtonPress-1>",
+                    lambda _e, sid=session_id: self.on_jam_entry_press(sid),
+                )
+                bind_widget.bind("<ButtonRelease-1>", self.on_jam_entry_release)
+
+        self.jam_grid_frame.update_idletasks()
+        self.jam_canvas.configure(scrollregion=self.jam_canvas.bbox("all"))
+
+    def on_jam_entry_press(self, session_id: str):
+        self.jam_drag_start_id = session_id
+
+    def on_jam_entry_release(self, event):
+        if not self.jam_drag_start_id:
+            return
+        target_widget = self.root.winfo_containing(event.x_root, event.y_root)
+        target_session_id = self.jam_widget_session_map.get(target_widget)
+        if target_session_id and target_session_id != self.jam_drag_start_id:
+            self.reorder_jam_sessions(self.jam_drag_start_id, target_session_id)
+        self.jam_drag_start_id = None
+
+    def reorder_jam_sessions(self, moved_session_id: str, target_session_id: str):
+        if moved_session_id not in self.active_jam_sessions:
+            return
+        if target_session_id not in self.active_jam_sessions:
+            return
+        old_sessions = [s for s in self.active_jam_sessions if s != moved_session_id]
+        target_idx = old_sessions.index(target_session_id)
+        old_sessions.insert(target_idx, moved_session_id)
+        self.active_jam_sessions = old_sessions
+        self.active_jam_dirty = True
+        self.render_active_jam_entries()
+        self.update_jam_controls_state()
+
+    def on_jam_entry_double_click(self, session_id: str):
+        session = self.saved_session_store.get_session(session_id)
+        if session:
+            self.show_jam_loading("Loading session...")
+            self.load_saved_session(
+                session,
+                on_complete=self.on_jam_session_loaded_from_jam,
+                switch_to_playback=False,
+            )
+
+    def on_jam_session_loaded_from_jam(self, success: bool):
+        self.hide_jam_loading()
+        if success:
+            self.notebook.select(self.playback_tab)
+        if not success:
+            messagebox.showerror("Load Jam Session", "Failed to load the session.")
+
+    def on_jam_entry_right_click(self, session_id: str):
+        if session_id in self.active_jam_sessions:
+            self.active_jam_sessions = [s for s in self.active_jam_sessions if s != session_id]
+            self.active_jam_dirty = True
+            self.render_active_jam_entries()
+            self.update_jam_controls_state()
+
+    def on_add_current_session_to_jam(self):
+        if not self.active_jam_title:
+            messagebox.showinfo("Add to Jam", "Please create or load a jam first.")
+            return
+
+        if self.selected_saved_session_id:
+            self._add_session_to_active_jam(self.selected_saved_session_id)
+            return
+
+        result = self.current_pipeline_result
+        if not result:
+            messagebox.showinfo("Add to Jam", "No active session is available to add.")
+            return
+
+        suggested_title = result.title or "Untitled"
+        title = simpledialog.askstring(
+            "Save Session",
+            "Enter a title for this session:",
+            initialvalue=suggested_title,
+            parent=self.root,
+        )
+        if title is None:
+            return
+
+        def worker():
+            try:
+                session = self.saved_session_store.add_session(
+                    title=title,
+                    song_key_text=self.song_key_text,
+                    session_dir=result.session_dir,
+                    audio_path=result.audio_path,
+                    stems_dir=result.stems_dir,
+                    thumbnail_bytes=self.current_thumbnail_bytes,
+                )
+            except Exception as e:
+                self.append_log(f"Failed to save session for jam: {e}")
+                return
+
+            def _after_save():
+                self.current_pipeline_result = None
+                self.set_session_title(session.title)
+                self.full_mix_path = session.audio_path
+                self.selected_saved_session_id = session.session_id
+                self.refresh_saved_sessions_list()
+                self.update_save_button_state()
+                self._add_session_to_active_jam(session.session_id)
+
+            self.root.after(0, _after_save)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _add_session_to_active_jam(self, session_id: str):
+        if not self.active_jam_title:
+            return
+        if session_id in self.active_jam_sessions:
+            return
+        self.active_jam_sessions.append(session_id)
+        self.active_jam_dirty = True
+        self.render_active_jam_entries()
+        self.update_jam_controls_state()
+
+    def on_save_jam(self):
+        if not self.active_jam_title:
+            messagebox.showinfo("Save Jam", "Please select or create a jam first.")
+            return
+
+        if self.active_jam_id and self.jam_store.get_jam(self.active_jam_id):
+            jam = self.jam_store.update_jam(
+                self.active_jam_id, self.active_jam_title, self.active_jam_sessions
+            )
+        else:
+            jam = self.jam_store.add_jam(
+                self.active_jam_title, self.active_jam_sessions, jam_id=self.active_jam_id
+            )
+
+        if jam:
+            self.active_jam_id = jam.jam_id
+            self.active_jam_title = jam.title
+            self.active_jam_dirty = False
+            self.refresh_jam_dropdown(select_id=jam.jam_id)
+            self.update_jam_controls_state()
+
+    def on_delete_jam(self):
+        if not self.active_jam_id:
+            self.clear_active_jam()
+            return
+
+        self.jam_store.delete_jam(self.active_jam_id)
+        self.clear_active_jam()
 
     # ---------- player UI ----------
 
