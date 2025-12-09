@@ -1,5 +1,6 @@
 # gui.py
 import math
+import textwrap
 import os
 import threading
 import urllib.request
@@ -866,6 +867,7 @@ class YTDemucsApp:
         self.jam_widget_session_map: dict[tk.Widget, str] = {}
         self.jam_drag_start_id: str | None = None
         self.jam_grid_columns = 3
+        self.jam_entry_title_width = 48
 
         self.wave_canvas: tk.Canvas | None = None
         self.wave_cursor_id: int | None = None
@@ -1875,7 +1877,14 @@ class YTDemucsApp:
 
             title_text = "Missing session"
             if session and session.title:
-                title_text = session.title
+                try:
+                    title_text = textwrap.shorten(
+                        session.title,
+                        width=self.jam_entry_title_width,
+                        placeholder="…",
+                    )
+                except Exception:
+                    title_text = session.title[: self.jam_entry_title_width]
 
             if session and session.thumbnail_path and os.path.exists(session.thumbnail_path):
                 try:
@@ -1889,9 +1898,7 @@ class YTDemucsApp:
             else:
                 thumb_label.configure(text="No\nthumbnail")
 
-            title_label = ttk.Label(
-                frame, text=title_text, wraplength=240, justify="center"
-            )
+            title_label = ttk.Label(frame, text=title_text, justify="center")
             title_label.grid(row=1, column=0, pady=(6, 0))
 
             for bind_widget in (frame, thumb_label, title_label):
