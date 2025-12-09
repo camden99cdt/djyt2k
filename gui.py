@@ -756,6 +756,7 @@ class YTDemucsApp:
 
         # ---------- GUI state ----------
         self.saved_session_store = SavedSessionStore()
+        self.saved_sessions_poll_interval_ms = 2000
         self.selected_saved_session_id: str | None = None
         self.displayed_sessions: list = []
         self.current_pipeline_result: PipelineResult | None = None
@@ -839,6 +840,7 @@ class YTDemucsApp:
         self.refresh_saved_sessions_list()
         self.update_save_button_state()
         self.hide_session_loading()
+        self.poll_saved_sessions_store()
 
         # url entry bindings
         self.search_controller.bind_entry_events()
@@ -1211,6 +1213,20 @@ class YTDemucsApp:
             self.saved_sessions_listbox.selection_clear(0, tk.END)
 
         self.update_save_button_state()
+
+    def poll_saved_sessions_store(self):
+        try:
+            changed = self.saved_session_store.refresh_from_disk()
+        except Exception:
+            changed = False
+
+        if changed:
+            self.refresh_saved_sessions_list()
+
+        if self.root.winfo_exists():
+            self.root.after(
+                self.saved_sessions_poll_interval_ms, self.poll_saved_sessions_store
+            )
 
     def on_sort_selection(self):
         selected_label = self.sort_dropdown_var.get()

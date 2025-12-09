@@ -78,14 +78,25 @@ class SavedSessionStore:
         self.base_dir = os.path.join(home, ".djyt")
         self.sessions_dir = os.path.join(self.base_dir, "sessions")
         self.index_path = os.path.join(self.base_dir, "sessions.json")
+        self._index_mtime: float | None = None
 
         os.makedirs(self.sessions_dir, exist_ok=True)
         self.sessions: List[SavedSession] = []
         self._load_sessions()
 
+    def _update_index_mtime(self):
+        if os.path.exists(self.index_path):
+            try:
+                self._index_mtime = os.path.getmtime(self.index_path)
+            except OSError:
+                self._index_mtime = None
+        else:
+            self._index_mtime = None
+
     def _load_sessions(self):
         if not os.path.exists(self.index_path):
             self.sessions = []
+            self._update_index_mtime()
             return
 
         try:
@@ -93,6 +104,7 @@ class SavedSessionStore:
                 data = json.load(f)
         except Exception:
             self.sessions = []
+            self._update_index_mtime()
             return
 
         sessions: List[SavedSession] = []
@@ -107,12 +119,14 @@ class SavedSessionStore:
                 continue
             sessions.append(session)
         self.sessions = sessions
+        self._update_index_mtime()
 
     def _write_sessions(self):
         data = [s.to_dict() for s in self.sessions]
         os.makedirs(self.base_dir, exist_ok=True)
         with open(self.index_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        self._update_index_mtime()
 
     def list_sessions(self) -> List[SavedSession]:
         return list(self.sessions)
@@ -181,3 +195,28 @@ class SavedSessionStore:
         session.title = new_title
         self._write_sessions()
         return session
+
+    def refresh_from_disk(self) -> bool:
+        """
+        Reload sessions if the on-disk index has changed.
+
+        Returns True if sessions were reloaded.
+        """
+
+        if not os.path.exists(self.index_path):
+            if self.sessions:
+                self.sessions = []
+                self._update_index_mtime()
+                return True
+            return False
+
+        try:
+            current_mtime = os.path.getmtime(self.index_path)
+        except OSError:
+            return False
+
+        if self._index_mtime is None or current_mtime > self._index_mtime:
+            self._load_sessions()
+            return True
+
+        return False
