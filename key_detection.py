@@ -3,8 +3,8 @@ import librosa
 import numpy as np
 from librosa import util
 
-DEFAULT_TARGET_SR = 22050
-DEFAULT_ANALYSIS_SECONDS = 120.0
+DEFAULT_TARGET_SR = 16000
+DEFAULT_ANALYSIS_SECONDS = 75.0
 
 # Key profiles for major and minor keys (Krumhansl-Schmuckler).
 major_profile = np.array([6.35, 2.23, 3.48, 2.33,
