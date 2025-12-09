@@ -867,7 +867,7 @@ class YTDemucsApp:
         self.jam_widget_session_map: dict[tk.Widget, str] = {}
         self.jam_drag_start_id: str | None = None
         self.jam_grid_columns = 3
-        self.jam_entry_title_width = 48
+        self.jam_entry_title_max_px = 240
 
         self.wave_canvas: tk.Canvas | None = None
         self.wave_cursor_id: int | None = None
@@ -1843,6 +1843,25 @@ class YTDemucsApp:
                 text=save_text, state="normal" if save_enabled else "disabled"
             )
 
+    def _truncate_title_for_jam_entry(
+        self, title: str, font: tkfont.Font, max_width_px: int
+    ) -> str:
+        ellipsis = "…"
+        if font.measure(title) <= max_width_px:
+            return title
+
+        trimmed = []
+        for ch in title:
+            test_text = "".join(trimmed) + ch + ellipsis
+            if font.measure(test_text) > max_width_px:
+                break
+            trimmed.append(ch)
+
+        if not trimmed:
+            return ellipsis
+
+        return "".join(trimmed) + ellipsis
+
     def render_active_jam_entries(self):
         for child in self.jam_grid_frame.winfo_children():
             child.destroy()
@@ -1865,6 +1884,8 @@ class YTDemucsApp:
             ).grid(row=0, column=0, padx=10, pady=10, sticky="w")
             return
 
+        title_font = tkfont.nametofont("TkDefaultFont")
+
         for idx, session_id in enumerate(self.active_jam_sessions):
             session = self.saved_session_store.get_session(session_id)
             row = idx // self.jam_grid_columns
@@ -1878,13 +1899,11 @@ class YTDemucsApp:
             title_text = "Missing session"
             if session and session.title:
                 try:
-                    title_text = textwrap.shorten(
-                        session.title,
-                        width=self.jam_entry_title_width,
-                        placeholder="…",
+                    title_text = self._truncate_title_for_jam_entry(
+                        session.title, title_font, self.jam_entry_title_max_px
                     )
                 except Exception:
-                    title_text = session.title[: self.jam_entry_title_width]
+                    title_text = session.title
 
             if session and session.thumbnail_path and os.path.exists(session.thumbnail_path):
                 try:
