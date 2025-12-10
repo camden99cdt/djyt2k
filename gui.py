@@ -3,6 +3,7 @@ import math
 import textwrap
 import os
 import threading
+import time
 import urllib.request
 import uuid
 from datetime import datetime
@@ -16,7 +17,7 @@ from tkinter import ttk, messagebox, simpledialog
 from PIL import Image, ImageTk
 
 from audio_player import StemAudioPlayer
-from pipeline import PipelineResult, PipelineRunner
+from pipeline import PipelineProcessWorker, PipelineResult
 from saved_sessions import SavedSession, SavedSessionStore
 from search_suggestion_controller import SearchSuggestionController
 from jam_store import Jam, JamStore
@@ -928,10 +929,7 @@ class YTDemucsApp:
         self.show_loop_tools(False)
 
         # pipeline orchestration
-        self.pipeline_runner = PipelineRunner(
-            log_callback=self.append_log,
-            status_callback=self.set_status,
-        )
+        self.pipeline_worker: PipelineProcessWorker | None = None
 
         # periodic UI updates
         self.root.after(100, self.update_playback_ui)
@@ -1274,15 +1272,49 @@ class YTDemucsApp:
 
     def run_pipeline(self, url: str):
         self.set_running(True)
+        worker = PipelineProcessWorker()
+        self.pipeline_worker = worker
         try:
-            result = self.pipeline_runner.process(
-                url, skip_separation=self.skip_sep_var.get()
-            )
-            self.handle_pipeline_success(result)
+            worker.start(url, skip_separation=self.skip_sep_var.get())
+        except Exception as e:
+            self.append_log(f"ERROR: {e}")
+            self.set_status("Error")
+            self.pipeline_worker = None
+            self.set_running(False)
+            return
+
+        result: PipelineResult | None = None
+        error_text: str | None = None
+        completed = False
+
+        try:
+            while not completed:
+                for message in worker.poll_messages():
+                    if message.kind == "log":
+                        self.append_log(message.payload)
+                    elif message.kind == "status":
+                        self.set_status(message.payload)
+                    elif message.kind == "result":
+                        result = message.payload
+                    elif message.kind == "error":
+                        error_text = message.payload
+                    elif message.kind == "complete":
+                        completed = True
+
+                if not completed:
+                    time.sleep(0.05)
+
+            if error_text:
+                self.append_log(f"ERROR: {error_text}")
+                self.set_status("Error")
+            elif result:
+                self.handle_pipeline_success(result)
         except Exception as e:
             self.append_log(f"ERROR: {e}")
             self.set_status("Error")
         finally:
+            worker.join(timeout=1)
+            self.pipeline_worker = None
             self.set_running(False)
 
     def handle_pipeline_success(self, result: PipelineResult):
