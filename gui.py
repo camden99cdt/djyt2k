@@ -45,6 +45,7 @@ class YTDemucsApp:
     sample_hotkeys_bound: bool = False
     sample_slots: dict[str, dict] = {}
     sample_player: SamplePlayer | None = None
+    sample_volume: float = 1.0
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
 
@@ -1139,6 +1140,10 @@ class YTDemucsApp:
     def get_sample_player(cls) -> SamplePlayer:
         if cls.sample_player is None:
             cls.sample_player = SamplePlayer()
+            try:
+                cls.sample_player.set_volume(cls.sample_volume)
+            except Exception:
+                pass
         return cls.sample_player
 
     @classmethod
@@ -1152,11 +1157,41 @@ class YTDemucsApp:
     @classmethod
     def stop_sample_player(cls):
         if cls.sample_player is not None:
+        try:
+            cls.sample_player.stop()
+        except Exception:
+            pass
+        cls.sample_player = None
+
+    @classmethod
+    def set_sample_volume(cls, volume: float):
+        cls.sample_volume = max(0.0, min(float(volume), 1.0))
+        player = cls.sample_player
+        if player is not None:
             try:
-                cls.sample_player.stop()
+                player.set_volume(cls.sample_volume)
             except Exception:
                 pass
-        cls.sample_player = None
+
+    @classmethod
+    def get_sample_volume(cls) -> float:
+        player = cls.sample_player
+        if player is not None:
+            try:
+                return player.get_volume()
+            except Exception:
+                pass
+        return cls.sample_volume
+
+    @classmethod
+    def get_sample_output_state(cls) -> tuple[float, bool]:
+        player = cls.sample_player
+        if player is None:
+            return 0.0, False
+        try:
+            return max(0.0, player.get_output_level()), player.is_clipping()
+        except Exception:
+            return 0.0, False
 
     @staticmethod
     def on_global_sample_hotkey(event=None):
@@ -3852,14 +3887,18 @@ class MasterWindow:
         self.master_frame.grid(row=0, column=2, sticky="ns")
         self.master_frame.columnconfigure(0, weight=1)
         self.master_frame.columnconfigure(1, weight=1)
+        self.master_frame.columnconfigure(2, weight=1)
 
         ttk.Label(self.master_frame, text="Master", font=self.title_font).grid(
-            row=0, column=0, columnspan=2, pady=(0, 2)
+            row=0, column=0, columnspan=3, pady=(0, 2)
         )
+
+        self.sample_volume_label = ttk.Label(self.master_frame, text="Samples 100%")
+        self.sample_volume_label.grid(row=1, column=0, pady=(0, 6))
 
         # Volume label directly under "Master"
         self.master_volume_label = ttk.Label(self.master_frame, text="100%")
-        self.master_volume_label.grid(row=1, column=0, columnspan=2, pady=(0, 6))
+        self.master_volume_label.grid(row=1, column=2, pady=(0, 6))
 
         self.master_meter = ttk.Progressbar(
             self.master_frame,
@@ -3870,10 +3909,23 @@ class MasterWindow:
             length=160,
             style=self.owner.meter_style_names["normal"],
         )
-        self.master_meter.grid(row=2, column=0, sticky="ns", padx=(10, 3))
+        self.master_meter.grid(row=2, column=1, sticky="ns", padx=(10, 3))
 
         self.master_meter_label = ttk.Label(self.master_frame, text="-∞ dB")
-        self.master_meter_label.grid(row=3, column=0, columnspan=2, pady=(4, 6))
+        self.master_meter_label.grid(row=3, column=1, columnspan=2, pady=(4, 6))
+
+        self.sample_volume_var = tk.DoubleVar(value=YTDemucsApp.get_sample_volume())
+        self.updating_sample_volume = False
+        self.sample_volume_slider = ttk.Scale(
+            self.master_frame,
+            from_=1.0,
+            to=0.0,
+            orient="vertical",
+            variable=self.sample_volume_var,
+            command=self.on_sample_volume_change,
+            length=180,
+        )
+        self.sample_volume_slider.grid(row=2, column=0, sticky="ns")
 
         self.master_volume_var = tk.DoubleVar(value=StemAudioPlayer.get_global_master_volume())
         self.master_volume_slider = ttk.Scale(
@@ -3885,24 +3937,25 @@ class MasterWindow:
             command=self.on_global_volume_change,
             length=180,
         )
-        self.master_volume_slider.grid(row=2, column=1, sticky="ns")
+        self.master_volume_slider.grid(row=2, column=2, sticky="ns")
 
         self.master_play_button = ttk.Button(
             self.master_frame, text="Play All", width=13, command=self.on_master_play_pause
         )
-        self.master_play_button.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 4))
+        self.master_play_button.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 4))
 
         self.master_mute_button = ttk.Button(
             self.master_frame, text="Mute All", width=13, command=self.on_master_mute_all
         )
-        self.master_mute_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        self.master_mute_button.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(0, 4))
 
         self.master_stop_button = ttk.Button(
             self.master_frame, text="Stop All", width=13, command=self.on_master_stop_all
         )
-        self.master_stop_button.grid(row=6, column=0, columnspan=2, sticky="ew")
+        self.master_stop_button.grid(row=6, column=0, columnspan=3, sticky="ew")
 
         self.update_master_volume_label()
+        self.update_sample_volume_label()
 
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(0, weight=1)
@@ -4212,6 +4265,22 @@ class MasterWindow:
         self.master_volume_var.set(volume)
         self.update_master_volume_label()
 
+    def on_sample_volume_change(self, value: str):
+        if getattr(self, "updating_sample_volume", False):
+            return
+
+        try:
+            volume = float(value)
+        except ValueError:
+            volume = 1.0
+
+        volume = max(0.0, min(volume, 1.0))
+        self.updating_sample_volume = True
+        YTDemucsApp.set_sample_volume(volume)
+        self.sample_volume_var.set(volume)
+        self.update_sample_volume_label()
+        self.updating_sample_volume = False
+
     # ---------- updates ----------
 
     def update_master_play_button(self):
@@ -4256,6 +4325,10 @@ class MasterWindow:
         pct = int(max(0.0, min(self.master_volume_var.get(), 1.0)) * 100)
         self.master_volume_label.config(text=f"{pct}%")
 
+    def update_sample_volume_label(self):
+        pct = int(max(0.0, min(self.sample_volume_var.get(), 1.0)) * 100)
+        self.sample_volume_label.config(text=f"Samples {pct}%")
+
     @staticmethod
     def compute_master_level(levels: list[float]) -> float:
         power = sum(max(0.0, l) ** 2 for l in levels)
@@ -4285,8 +4358,20 @@ class MasterWindow:
             return
 
         active_apps = self.refresh_sessions()
+        sample_level, sample_clipping = YTDemucsApp.get_sample_output_state()
         levels: list[float] = []
         any_clipping = False
+        if self.sample_volume_var is not None:
+            current_sample_volume = YTDemucsApp.get_sample_volume()
+            if abs(self.sample_volume_var.get() - current_sample_volume) > 1e-4:
+                self.updating_sample_volume = True
+                self.sample_volume_var.set(current_sample_volume)
+                self.updating_sample_volume = False
+            self.update_sample_volume_label()
+
+        if YTDemucsApp.sample_player is not None or sample_level > 0.0:
+            levels.append(sample_level)
+            any_clipping = any_clipping or sample_clipping
         for app in active_apps:
             state = self.session_states.get(app)
             if not state:

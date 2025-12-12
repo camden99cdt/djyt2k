@@ -1,6 +1,7 @@
 import numpy as np
 import soundfile as sf
 
+from audio_player import StemAudioPlayer
 from playback_engine import PlaybackEngine
 
 
@@ -9,6 +10,9 @@ class SamplePlayer:
         self.engine: PlaybackEngine | None = None
         self.sample_rate: int | None = None
         self.active_clips: list[dict] = []
+        self.volume: float = 1.0
+        self.output_level: float = 0.0
+        self.clipping: bool = False
 
     def _ensure_engine(self):
         if self.sample_rate is None:
@@ -26,6 +30,8 @@ class SamplePlayer:
 
     def _pull_audio(self, frames: int) -> np.ndarray:
         if not self.active_clips or self.sample_rate is None:
+            self.output_level = 0.0
+            self.clipping = False
             return np.zeros(frames, dtype="float32")
 
         buffer = np.zeros(frames, dtype="float32")
@@ -49,6 +55,17 @@ class SamplePlayer:
                 remaining.append(clip)
 
         self.active_clips = remaining
+
+        buffer *= self.volume * StemAudioPlayer.get_global_master_volume()
+        try:
+            self.clipping = bool(np.any(np.abs(buffer) > 1.0))
+        except Exception:
+            self.clipping = False
+        try:
+            self.output_level = float(np.sqrt(np.mean(np.square(buffer))))
+        except Exception:
+            self.output_level = 0.0
+        np.clip(buffer, -1.0, 1.0, out=buffer)
         return buffer
 
     @staticmethod
@@ -85,9 +102,23 @@ class SamplePlayer:
             data = data.mean(axis=1)
         return self.play_clip(data, sr)
 
+    def set_volume(self, volume: float):
+        self.volume = max(0.0, min(float(volume), 1.0))
+
+    def get_volume(self) -> float:
+        return self.volume
+
+    def get_output_level(self) -> float:
+        return self.output_level
+
+    def is_clipping(self) -> bool:
+        return self.clipping
+
     def stop(self):
         self.active_clips = []
         if self.engine is not None:
             self.engine.stop()
             self.engine = None
         self.sample_rate = None
+        self.output_level = 0.0
+        self.clipping = False
