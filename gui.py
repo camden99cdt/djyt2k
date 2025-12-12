@@ -42,6 +42,7 @@ class YTDemucsApp:
     instances: list["YTDemucsApp"] = []
     master_window: "MasterWindow | None" = None
     samples_window: "SamplesWindow | None" = None
+    sample_hotkeys_bound: bool = False
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
 
@@ -932,7 +933,8 @@ class YTDemucsApp:
         self.song_key_text: str | None = None  # detected key, e.g. "F major"
 
         self.sample_store = SampleStore()
-        
+        self.bind_sample_hotkeys()
+
         self.search_controller = SearchSuggestionController(
             self.root, self.url_var, self.url_entry
         )
@@ -1111,6 +1113,33 @@ class YTDemucsApp:
 
     def on_samples_shortcut(self, event=None):
         self.toggle_samples_window()
+
+    def bind_sample_hotkeys(self):
+        if YTDemucsApp.sample_hotkeys_bound:
+            return
+
+        def bind_sequence(sequence: str):
+            try:
+                self.root.bind_all(sequence, YTDemucsApp.on_global_sample_hotkey)
+            except Exception:
+                pass
+
+        for key in SamplesWindow.SLOT_KEYS:
+            for seq in (f"<{key.lower()}>", f"<{key.upper()}>"):
+                bind_sequence(seq)
+
+        YTDemucsApp.sample_hotkeys_bound = True
+
+    @staticmethod
+    def on_global_sample_hotkey(event=None):
+        if not event:
+            return
+        window = YTDemucsApp.samples_window
+        if not window or not window.window.winfo_exists():
+            return
+        key = (event.keysym or "").upper()
+        if key in SamplesWindow.SLOT_KEYS:
+            window.play_slot(key)
 
     def create_new_window(self):
         master = self.root if isinstance(self.root, tk.Tk) else (self.root.master or self.root)
@@ -2830,13 +2859,8 @@ class YTDemucsApp:
         session = self.player.session
         sample_rate = session.sample_rate
         loop_bounds = self.player.loop_controller.get_bounds_samples(session.total_samples)
-        audio_data = (
-            session.current_mix_data
-            if session.current_mix_data is not None
-            else session.original_mix
-        )
 
-        if sample_rate is None or audio_data is None:
+        if sample_rate is None:
             messagebox.showerror("Clip", "No mix available to clip.")
             return
 
@@ -2845,10 +2869,7 @@ class YTDemucsApp:
             return
 
         start, end = loop_bounds
-        start = max(0, min(start, audio_data.shape[0]))
-        end = max(start + 1, min(end, audio_data.shape[0]))
-
-        clip_data = audio_data[start:end]
+        clip_data = session.get_selection_slice(start, end)
         if clip_data.size == 0:
             messagebox.showinfo("Clip", "Loop is too short to save.")
             return
@@ -4397,6 +4418,7 @@ class SamplesWindow:
         key = (event.keysym or "").upper()
         if key in self.SLOT_KEYS:
             self.play_slot(key)
+            return "break"
 
     def on_slot_click(self, slot_key: str):
         if slot_key in self.loaded_clips:
