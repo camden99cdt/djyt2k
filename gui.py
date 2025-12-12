@@ -877,6 +877,8 @@ class YTDemucsApp:
         self.play_pause_button: ttk.Button | None = None
         self.stop_button: ttk.Button | None = None
         self.loop_button: ttk.Button | None = None
+        self.cue_button: ttk.Checkbutton | None = None
+        self.cue_var: tk.BooleanVar | None = None
         self.volume_label: ttk.Label | None = None
         self.volume_var: tk.DoubleVar | None = None
         self.volume_slider: ttk.Scale | None = None
@@ -2140,6 +2142,8 @@ class YTDemucsApp:
             self.append_log("No full mix path available.")
             return
 
+        self.player.set_route_to_headphones(False)
+
         # clear UI
         for w in self.player_frame.winfo_children():
             w.destroy()
@@ -2158,6 +2162,8 @@ class YTDemucsApp:
         self.play_pause_button = None
         self.stop_button = None
         self.loop_button = None
+        self.cue_button = None
+        self.cue_var = None
         self.volume_var = None
         self.volume_label = None
         self.volume_slider = None
@@ -2358,7 +2364,7 @@ class YTDemucsApp:
         transport_frame = ttk.Frame(self.player_frame)
         transport_frame.grid(row=1, column=0, sticky="ew", pady=(5, 0))
         transport_frame.columnconfigure(0, weight=0)
-        for col in range(1, 6):
+        for col in range(1, 7):
             transport_frame.columnconfigure(
                 col,
                 weight=1,
@@ -2393,6 +2399,18 @@ class YTDemucsApp:
             transport_frame, text="Clear", command=self.on_clear_app
         )
         clear_button.grid(row=0, column=5, sticky="nsew")
+
+        self.cue_var = tk.BooleanVar(value=False)
+        self.cue_button = ttk.Checkbutton(
+            transport_frame,
+            text="Cue",
+            variable=self.cue_var,
+            command=self.on_toggle_cue,
+            style="Toolbutton",
+        )
+        self.cue_button.grid(row=0, column=6, sticky="nsew")
+        self.playback_control_widgets.append(self.cue_button)
+        self.update_cue_button()
 
         self.update_loop_button()
 
@@ -2722,6 +2740,18 @@ class YTDemucsApp:
             self.loop_button.config(text="Loop")
         self.show_loop_tools(self.player.loop_controller.enabled)
 
+    def on_toggle_cue(self):
+        enabled = bool(self.cue_var.get()) if self.cue_var is not None else False
+        self.player.set_route_to_headphones(enabled)
+        self.update_cue_button()
+
+    def update_cue_button(self):
+        if self.cue_button is None:
+            return
+        enabled = bool(self.cue_var.get()) if self.cue_var is not None else False
+        text = "Cue → HP" if enabled else "Cue"
+        self.cue_button.config(text=text)
+
     def show_loop_tools(self, show_loop_tools: bool):
         if self.loop_tools_frame is None or self.harmonics_frame is None:
             return
@@ -2790,6 +2820,8 @@ class YTDemucsApp:
         self.play_pause_button = None
         self.stop_button = None
         self.loop_button = None
+        self.cue_button = None
+        self.cue_var = None
         self.volume_var = None
         self.volume_label = None
         self.speed_var = None
@@ -2878,6 +2910,10 @@ class YTDemucsApp:
             self.reverb_enabled_var.set(False)
         if self.reverb_mix_var is not None:
             self.reverb_mix_var.set(0.45)
+        if self.cue_var is not None:
+            self.cue_var.set(False)
+            self.player.set_route_to_headphones(False)
+            self.update_cue_button()
         self.reset_frequency_band_controls()
 
         # stem selection — always revert to the All mix at default speed/pitch

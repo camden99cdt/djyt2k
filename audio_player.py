@@ -53,6 +53,7 @@ class StemAudioPlayer:
 
         self.loop_controller = LoopController()
         self.loop_crossfade_enabled: bool = False
+        self.route_to_headphones: bool = False
 
     # ---------- global master volume ----------
 
@@ -252,8 +253,18 @@ class StemAudioPlayer:
                 sample_rate=self.session.sample_rate,
                 pull_callback=self._pull_audio,
                 blocksize=self.blocksize,
+                output_channels=2,
+                route_to_headphones=self.route_to_headphones,
             )
             self.engine.start()
+
+    def set_route_to_headphones(self, enabled: bool):
+        self.route_to_headphones = bool(enabled)
+        if self.engine is not None:
+            self.engine.set_route_to_headphones(self.route_to_headphones)
+
+    def is_cue_to_headphones(self) -> bool:
+        return self.route_to_headphones
 
     def _pull_audio(self, frames: int) -> np.ndarray:
         """
