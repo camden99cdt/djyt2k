@@ -414,6 +414,7 @@ class YTDemucsApp:
         self.loop_tools_frame = ttk.Frame(self.sidebar_frame)
         self.loop_tools_frame.grid(row=0, column=0, sticky="nsew")
         self.loop_tools_frame.columnconfigure(0, weight=1)
+        self.loop_tools_frame.columnconfigure(1, weight=1)
         self.loop_tools_frame.rowconfigure(6, weight=1)
 
         underline_font = tkfont.nametofont("TkDefaultFont").copy()
@@ -421,7 +422,7 @@ class YTDemucsApp:
         loop_title = ttk.Label(
             self.loop_tools_frame, text="Loop", anchor="center", font=underline_font
         )
-        loop_title.grid(row=0, column=0, pady=(0, 6))
+        loop_title.grid(row=0, column=0, columnspan=2, pady=(0, 6))
         self.loop_title_label = loop_title
 
         self.play_from_loop_var = tk.BooleanVar(value=False)
@@ -430,7 +431,9 @@ class YTDemucsApp:
             text="Make Top",
             variable=self.play_from_loop_var,
         )
-        self.play_from_loop_checkbox.grid(row=1, column=0, sticky="w", pady=(0, 4))
+        self.play_from_loop_checkbox.grid(
+            row=1, column=0, sticky="w", pady=(0, 4), padx=(0, 8)
+        )
 
         self.crossfade_var = tk.BooleanVar(value=False)
         self.crossfade_checkbox = ttk.Checkbutton(
@@ -439,10 +442,10 @@ class YTDemucsApp:
             variable=self.crossfade_var,
             command=self.on_toggle_crossfade,
         )
-        self.crossfade_checkbox.grid(row=2, column=0, sticky="w", pady=(0, 8))
+        self.crossfade_checkbox.grid(row=1, column=1, sticky="w", pady=(0, 8))
 
         self.loop_start_buttons = ttk.Frame(self.loop_tools_frame)
-        self.loop_start_buttons.grid(row=3, column=0, pady=(0, 2))
+        self.loop_start_buttons.grid(row=2, column=0, columnspan=2, pady=(0, 2))
         self.loop_start_buttons.columnconfigure(0, weight=1)
         self.loop_start_buttons.columnconfigure(1, weight=0)
         self.loop_start_buttons.columnconfigure(2, weight=1)
@@ -453,7 +456,7 @@ class YTDemucsApp:
             bg="#c8f5d4",
             activebackground="#b3eac4",
             width=5,
-            height=1,
+            height=0,
             command=lambda: self.nudge_loop_start(-0.05),
         )
         self.loop_start_back_btn.grid(row=0, column=0, padx=(0, 4))
@@ -464,7 +467,7 @@ class YTDemucsApp:
             bg="#f5e3a1",
             activebackground="#ead98f",
             width=2,
-            height=1,
+            height=0,
             command=self.set_loop_start_to_current,
         )
         self.loop_start_current_btn.grid(row=0, column=1, padx=2)
@@ -475,7 +478,7 @@ class YTDemucsApp:
             bg="#c8f5d4",
             activebackground="#b3eac4",
             width=5,
-            height=1,
+            height=0,
             command=lambda: self.nudge_loop_start(0.05),
         )
         self.loop_start_forward_btn.grid(row=0, column=2, padx=(4, 0))
@@ -483,10 +486,10 @@ class YTDemucsApp:
         self.loop_start_value_label = ttk.Label(
             self.loop_tools_frame, text="00:00:000", foreground="#00a04a"
         )
-        self.loop_start_value_label.grid(row=4, column=0, pady=(2, 8))
+        self.loop_start_value_label.grid(row=3, column=0, columnspan=2, pady=(2, 8))
 
         self.loop_end_buttons = ttk.Frame(self.loop_tools_frame)
-        self.loop_end_buttons.grid(row=5, column=0, pady=(0, 2))
+        self.loop_end_buttons.grid(row=4, column=0, columnspan=2, pady=(0, 2))
         self.loop_end_buttons.columnconfigure(0, weight=1)
         self.loop_end_buttons.columnconfigure(1, weight=0)
         self.loop_end_buttons.columnconfigure(2, weight=1)
@@ -497,7 +500,7 @@ class YTDemucsApp:
             bg="#f5c8c8",
             activebackground="#eab3b3",
             width=5,
-            height=1,
+            height=0,
             command=lambda: self.nudge_loop_end(-0.05),
         )
         self.loop_end_back_btn.grid(row=0, column=0, padx=(0, 4))
@@ -508,7 +511,7 @@ class YTDemucsApp:
             bg="#f5e3a1",
             activebackground="#ead98f",
             width=2,
-            height=1,
+            height=0,
             command=self.set_loop_end_to_current,
         )
         self.loop_end_current_btn.grid(row=0, column=1, padx=2)
@@ -519,7 +522,7 @@ class YTDemucsApp:
             bg="#f5c8c8",
             activebackground="#eab3b3",
             width=5,
-            height=1,
+            height=0,
             command=lambda: self.nudge_loop_end(0.05),
         )
         self.loop_end_forward_btn.grid(row=0, column=2, padx=(4, 0))
@@ -527,14 +530,17 @@ class YTDemucsApp:
         self.loop_end_value_label = ttk.Label(
             self.loop_tools_frame, text="00:00:000", foreground="#c00000"
         )
-        self.loop_end_value_label.grid(row=6, column=0, pady=(2, 8))
+        self.loop_end_value_label.grid(row=5, column=0, columnspan=2, pady=(2, 8))
 
         self.reset_loop_button = ttk.Button(
             self.loop_tools_frame,
             text="Reset Loop",
             command=self.on_reset_loop_bounds,
+            padding=(0, 2),
         )
-        self.reset_loop_button.grid(row=7, column=0, sticky="ew", pady=(0, 0))
+        self.reset_loop_button.grid(
+            row=6, column=0, columnspan=2, sticky="ew", pady=(0, 0), padx=(0, 4)
+        )
 
         self.loop_tools_frame.grid_remove()
 
