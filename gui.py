@@ -15,12 +15,15 @@ import tkinter.font as tkfont
 from tkinter import ttk, messagebox, simpledialog
 
 from PIL import Image, ImageTk
+import soundfile as sf
 
 from audio_player import StemAudioPlayer
 from pipeline import PipelineProcessWorker, PipelineResult
 from saved_sessions import SavedSession, SavedSessionStore
 from search_suggestion_controller import SearchSuggestionController
 from jam_store import Jam, JamStore
+from sample_player import SamplePlayer
+from sample_store import SampleEntry, SampleStore
 
 CHROMA_LABELS = ['C', 'C#', 'D', 'D#', 'E', 'F',
                  'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -38,6 +41,7 @@ FLAT_TO_SHARP = {
 class YTDemucsApp:
     instances: list["YTDemucsApp"] = []
     master_window: "MasterWindow | None" = None
+    samples_window: "SamplesWindow | None" = None
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
 
@@ -529,12 +533,24 @@ class YTDemucsApp:
         )
         self.loop_end_value_label.grid(row=6, column=0, pady=(2, 8))
 
+        self.loop_action_buttons = ttk.Frame(self.loop_tools_frame)
+        self.loop_action_buttons.grid(row=7, column=0, sticky="ew", pady=(0, 0))
+        self.loop_action_buttons.columnconfigure(0, weight=1)
+        self.loop_action_buttons.columnconfigure(1, weight=1)
+
+        self.clip_loop_button = ttk.Button(
+            self.loop_action_buttons,
+            text="Clip",
+            command=self.on_clip_sample,
+        )
+        self.clip_loop_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
         self.reset_loop_button = ttk.Button(
-            self.loop_tools_frame,
+            self.loop_action_buttons,
             text="Reset Loop",
             command=self.on_reset_loop_bounds,
         )
-        self.reset_loop_button.grid(row=7, column=0, sticky="ew", pady=(0, 0))
+        self.reset_loop_button.grid(row=0, column=1, sticky="ew")
 
         self.loop_tools_frame.grid_remove()
 
@@ -556,6 +572,7 @@ class YTDemucsApp:
                 self.loop_end_back_btn,
                 self.loop_end_current_btn,
                 self.loop_end_forward_btn,
+                self.clip_loop_button,
                 self.reset_loop_button,
             ]
         )
@@ -914,6 +931,8 @@ class YTDemucsApp:
         self.session_title_original: str | None = None
         self.song_key_text: str | None = None  # detected key, e.g. "F major"
 
+        self.sample_store = SampleStore()
+        
         self.search_controller = SearchSuggestionController(
             self.root, self.url_var, self.url_entry
         )
@@ -1064,6 +1083,11 @@ class YTDemucsApp:
             accelerator="Ctrl+M",
             command=self.open_master_window,
         )
+        view_menu.add_command(
+            label="Samples",
+            accelerator="Ctrl+Shift+S",
+            command=self.open_samples_window,
+        )
         menubar.add_cascade(label="View", menu=view_menu)
         self.root.config(menu=menubar)
         for sequence, handler in (
@@ -1071,6 +1095,8 @@ class YTDemucsApp:
             ("<Control-w>", self.on_close_window_shortcut),
             ("<Control-m>", self.on_master_shortcut),
             ("<Control-M>", self.on_master_shortcut),
+            ("<Control-Shift-s>", self.on_samples_shortcut),
+            ("<Control-Shift-S>", self.on_samples_shortcut),
         ):
             self.root.bind(sequence, handler)
 
@@ -1082,6 +1108,9 @@ class YTDemucsApp:
 
     def on_master_shortcut(self, event=None):
         self.toggle_master_window()
+
+    def on_samples_shortcut(self, event=None):
+        self.toggle_samples_window()
 
     def create_new_window(self):
         master = self.root if isinstance(self.root, tk.Tk) else (self.root.master or self.root)
@@ -1113,12 +1142,14 @@ class YTDemucsApp:
 
         if not YTDemucsApp.instances:
             YTDemucsApp.close_master_window()
+            YTDemucsApp.close_samples_window()
 
         if self.root.winfo_exists():
             self.root.destroy()
 
     def exit_application(self):
         YTDemucsApp.close_master_window()
+        YTDemucsApp.close_samples_window()
         for instance in list(YTDemucsApp.instances):
             instance.destroy_window()
         try:
@@ -1142,6 +1173,22 @@ class YTDemucsApp:
         else:
             self.open_master_window()
 
+    def open_samples_window(self):
+        existing = YTDemucsApp.samples_window
+        if existing and existing.window.winfo_exists():
+            existing.window.lift()
+            existing.window.focus_force()
+            return
+
+        YTDemucsApp.samples_window = SamplesWindow(self, self.sample_store)
+
+    def toggle_samples_window(self):
+        existing = YTDemucsApp.samples_window
+        if existing and existing.window.winfo_exists():
+            YTDemucsApp.close_samples_window()
+        else:
+            self.open_samples_window()
+
     @classmethod
     def close_master_window(cls):
         if cls.master_window and cls.master_window.window.winfo_exists():
@@ -1150,6 +1197,18 @@ class YTDemucsApp:
             except Exception:
                 pass
         cls.master_window = None
+
+    @classmethod
+    def close_samples_window(cls):
+        if cls.samples_window and cls.samples_window.window.winfo_exists():
+            try:
+                cls.samples_window.close()
+            except Exception:
+                try:
+                    cls.samples_window.window.destroy()
+                except Exception:
+                    pass
+        cls.samples_window = None
 
     # ---------- logging / status ----------
 
@@ -2766,6 +2825,57 @@ class YTDemucsApp:
         self.draw_waveform()
         self.update_loop_position_labels()
 
+    def on_clip_sample(self):
+        if not self.has_active_session():
+            messagebox.showinfo("Clip", "Load audio and set a loop to clip a sample.")
+            return
+
+        session = self.player.session
+        sample_rate = session.sample_rate
+        loop_bounds = self.player.loop_controller.get_bounds_samples(session.total_samples)
+        audio_data = session.current_mix_data or session.original_mix
+
+        if sample_rate is None or audio_data is None:
+            messagebox.showerror("Clip", "No mix available to clip.")
+            return
+
+        if loop_bounds is None:
+            messagebox.showinfo("Clip", "Set loop start and end points first.")
+            return
+
+        start, end = loop_bounds
+        start = max(0, min(start, audio_data.shape[0]))
+        end = max(start + 1, min(end, audio_data.shape[0]))
+
+        clip_data = audio_data[start:end]
+        if clip_data.size == 0:
+            messagebox.showinfo("Clip", "Loop is too short to save.")
+            return
+
+        sample_dir = os.path.join(self.sample_store.samples_dir, uuid.uuid4().hex)
+        os.makedirs(sample_dir, exist_ok=True)
+        sample_path = os.path.join(sample_dir, "sample.wav")
+
+        try:
+            sf.write(sample_path, clip_data, sample_rate)
+        except Exception as exc:
+            messagebox.showerror("Clip", f"Failed to save sample: {exc}")
+            return
+
+        duration_seconds = clip_data.size / float(sample_rate)
+        session_title = self.current_title or self.get_session_display_name()
+        self.sample_store.add_sample(
+            session_title=session_title or "Untitled Session",
+            duration_seconds=duration_seconds,
+            file_path=sample_path,
+            created_at=datetime.now().isoformat(),
+        )
+
+        if YTDemucsApp.samples_window and YTDemucsApp.samples_window.window.winfo_exists():
+            YTDemucsApp.samples_window.refresh_samples()
+
+        messagebox.showinfo("Clip", "Sample saved to the library.")
+
     # ---------- RESET & CLEAR ----------
 
     def clear_current_session(self):
@@ -4195,4 +4305,226 @@ class MasterWindow:
         if len(name) <= max_len:
             return name
         return name[: max_len - 3] + "..."
+
+
+class SamplesWindow:
+    SLOT_KEYS = ["Q", "W", "E", "A", "S", "D", "Z", "X", "C"]
+
+    def __init__(self, owner: YTDemucsApp, store: SampleStore):
+        self.owner = owner
+        self.store = store
+        self.window = tk.Toplevel(owner.root)
+        self.window.title("Samples")
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+
+        self.sample_player = SamplePlayer()
+        self.slot_title_vars: dict[str, tk.StringVar] = {}
+        self.slot_remove_buttons: dict[str, ttk.Button] = {}
+        self.loaded_clips: dict[str, dict] = {}
+
+        self.library_window: tk.Toplevel | None = None
+        self.library_listbox: tk.Listbox | None = None
+        self.library_entries: list[SampleEntry] = []
+        self.library_target_key: str | None = None
+
+        content = ttk.Frame(self.window, padding=10)
+        content.grid(row=0, column=0, sticky="nsew")
+        for i in range(3):
+            content.columnconfigure(i, weight=1, uniform="samples")
+            content.rowconfigure(i, weight=1, uniform="samples")
+
+        for idx, key in enumerate(self.SLOT_KEYS):
+            row = idx // 3
+            col = idx % 3
+            frame = tk.Frame(
+                content,
+                bd=2,
+                relief="ridge",
+                width=180,
+                height=110,
+                background="#f7f7f7",
+            )
+            frame.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
+            frame.grid_propagate(False)
+            frame.columnconfigure(0, weight=1)
+
+            letter_label = ttk.Label(frame, text=key, font=("TkDefaultFont", 16, "bold"))
+            letter_label.grid(row=0, column=0, sticky="w", padx=(6, 0), pady=(4, 0))
+
+            title_var = tk.StringVar(value="Empty")
+            title_lbl = ttk.Label(frame, textvariable=title_var, wraplength=150, anchor="center")
+            title_lbl.grid(row=1, column=0, sticky="nsew", pady=(8, 4))
+
+            remove_btn = ttk.Button(
+                frame, text="Remove", command=lambda k=key: self.clear_slot(k)
+            )
+            remove_btn.grid(row=2, column=0, pady=(4, 6))
+            remove_btn.grid_remove()
+
+            for widget in (frame, letter_label, title_lbl):
+                widget.bind("<Button-1>", lambda _e, k=key: self.on_slot_click(k))
+
+            self.slot_title_vars[key] = title_var
+            self.slot_remove_buttons[key] = remove_btn
+
+        self.window.columnconfigure(0, weight=1)
+        self.window.rowconfigure(0, weight=1)
+
+        self.window.bind("<KeyPress>", self.on_key_press)
+        for key in self.SLOT_KEYS:
+            self.window.bind(f"<{key.lower()}>", self.on_key_press)
+            self.window.bind(f"<{key.upper()}>", self.on_key_press)
+
+        self.refresh_samples()
+
+    def close(self):
+        self.sample_player.stop()
+        try:
+            self.window.destroy()
+        finally:
+            if YTDemucsApp.samples_window is self:
+                YTDemucsApp.samples_window = None
+
+    def refresh_samples(self):
+        self.store.reload_if_changed()
+        if self.library_window and self.library_window.winfo_exists():
+            self.populate_library_list()
+
+    def on_key_press(self, event=None):
+        if not event:
+            return
+        key = (event.keysym or "").upper()
+        if key in self.SLOT_KEYS:
+            self.play_slot(key)
+
+    def on_slot_click(self, slot_key: str):
+        if slot_key in self.loaded_clips:
+            self.play_slot(slot_key)
+        else:
+            self.open_library(slot_key)
+
+    def open_library(self, slot_key: str):
+        self.library_target_key = slot_key
+        self.store.reload_if_changed()
+        entries = self.store.list_samples()
+        if not entries:
+            messagebox.showinfo("Samples", "No samples available. Use Clip to add one.")
+            return
+
+        if self.library_window and self.library_window.winfo_exists():
+            self.library_window.lift()
+            self.populate_library_list()
+            return
+
+        self.library_window = tk.Toplevel(self.window)
+        self.library_window.title("Sample Library")
+        self.library_window.protocol("WM_DELETE_WINDOW", self.close_library)
+
+        container = ttk.Frame(self.library_window, padding=10)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.rowconfigure(1, weight=1)
+        container.columnconfigure(0, weight=1)
+
+        ttk.Label(container, text="Select a sample to load:").grid(
+            row=0, column=0, sticky="w", pady=(0, 6)
+        )
+
+        self.library_listbox = tk.Listbox(container, height=10, exportselection=False)
+        self.library_listbox.grid(row=1, column=0, sticky="nsew")
+        self.library_listbox.bind("<Double-Button-1>", self.on_library_choose)
+
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.library_listbox.yview)
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        self.library_listbox.configure(yscrollcommand=scrollbar.set)
+
+        btn_row = ttk.Frame(container)
+        btn_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        btn_row.columnconfigure(0, weight=1)
+        btn_row.columnconfigure(1, weight=1)
+
+        ttk.Button(btn_row, text="Load", command=self.on_library_choose).grid(
+            row=0, column=0, sticky="ew", padx=(0, 4)
+        )
+        ttk.Button(btn_row, text="Cancel", command=self.close_library).grid(
+            row=0, column=1, sticky="ew"
+        )
+
+        self.library_window.columnconfigure(0, weight=1)
+        self.library_window.rowconfigure(0, weight=1)
+
+        self.populate_library_list()
+
+    def close_library(self):
+        if self.library_window and self.library_window.winfo_exists():
+            self.library_window.destroy()
+        self.library_window = None
+        self.library_listbox = None
+        self.library_entries = []
+        self.library_target_key = None
+
+    def populate_library_list(self):
+        if not self.library_listbox:
+            return
+        self.library_entries = sorted(
+            self.store.list_samples(),
+            key=lambda s: s.created_at,
+            reverse=True,
+        )
+        self.library_listbox.delete(0, "end")
+        for entry in self.library_entries:
+            duration = f"{entry.duration_seconds:.2f}s"
+            label = f"{entry.session_title} — {duration} — {entry.created_at}"
+            self.library_listbox.insert("end", label)
+
+    def on_library_choose(self, event=None):
+        if not self.library_listbox or self.library_target_key is None:
+            return
+        selection = self.library_listbox.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        if idx >= len(self.library_entries):
+            return
+        entry = self.library_entries[idx]
+        self.load_sample_into_slot(self.library_target_key, entry)
+        self.close_library()
+
+    def load_sample_into_slot(self, slot_key: str, entry: SampleEntry):
+        try:
+            data, sample_rate = sf.read(entry.file_path, dtype="float32")
+        except Exception:
+            messagebox.showerror("Samples", "Failed to load the selected sample.")
+            return
+
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+
+        self.loaded_clips[slot_key] = {
+            "entry": entry,
+            "data": data,
+            "sample_rate": sample_rate,
+        }
+        title_var = self.slot_title_vars.get(slot_key)
+        if title_var:
+            title_var.set(entry.session_title)
+        remove_btn = self.slot_remove_buttons.get(slot_key)
+        if remove_btn:
+            remove_btn.grid()
+
+    def clear_slot(self, slot_key: str):
+        self.loaded_clips.pop(slot_key, None)
+        title_var = self.slot_title_vars.get(slot_key)
+        if title_var:
+            title_var.set("Empty")
+        remove_btn = self.slot_remove_buttons.get(slot_key)
+        if remove_btn:
+            remove_btn.grid_remove()
+
+    def play_slot(self, slot_key: str):
+        clip = self.loaded_clips.get(slot_key)
+        if not clip:
+            return
+        success = self.sample_player.play_clip(clip["data"], clip["sample_rate"])
+        if not success:
+            messagebox.showerror("Samples", "Unable to play the selected sample.")
 
