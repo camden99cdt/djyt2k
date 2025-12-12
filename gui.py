@@ -43,6 +43,8 @@ class YTDemucsApp:
     master_window: "MasterWindow | None" = None
     samples_window: "SamplesWindow | None" = None
     sample_hotkeys_bound: bool = False
+    sample_slots: dict[str, dict] = {}
+    sample_player: SamplePlayer | None = None
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
 
@@ -933,6 +935,9 @@ class YTDemucsApp:
         self.song_key_text: str | None = None  # detected key, e.g. "F major"
 
         self.sample_store = SampleStore()
+        YTDemucsApp.get_sample_player()
+        self.sample_player = YTDemucsApp.sample_player
+        self.sample_slots = YTDemucsApp.sample_slots
         self.bind_sample_hotkeys()
 
         self.search_controller = SearchSuggestionController(
@@ -1130,16 +1135,38 @@ class YTDemucsApp:
 
         YTDemucsApp.sample_hotkeys_bound = True
 
+    @classmethod
+    def get_sample_player(cls) -> SamplePlayer:
+        if cls.sample_player is None:
+            cls.sample_player = SamplePlayer()
+        return cls.sample_player
+
+    @classmethod
+    def play_sample_slot(cls, slot_key: str) -> bool:
+        clip = cls.sample_slots.get((slot_key or "").upper())
+        if not clip:
+            return False
+        player = cls.get_sample_player()
+        return player.play_clip(clip["data"], clip["sample_rate"])
+
+    @classmethod
+    def stop_sample_player(cls):
+        if cls.sample_player is not None:
+            try:
+                cls.sample_player.stop()
+            except Exception:
+                pass
+        cls.sample_player = None
+
     @staticmethod
     def on_global_sample_hotkey(event=None):
         if not event:
             return
-        window = YTDemucsApp.samples_window
-        if not window or not window.window.winfo_exists():
-            return
         key = (event.keysym or "").upper()
         if key in SamplesWindow.SLOT_KEYS:
-            window.play_slot(key)
+            played = YTDemucsApp.play_sample_slot(key)
+            if played:
+                return "break"
 
     def create_new_window(self):
         master = self.root if isinstance(self.root, tk.Tk) else (self.root.master or self.root)
@@ -1172,6 +1199,7 @@ class YTDemucsApp:
         if not YTDemucsApp.instances:
             YTDemucsApp.close_master_window()
             YTDemucsApp.close_samples_window()
+            YTDemucsApp.stop_sample_player()
 
         if self.root.winfo_exists():
             self.root.destroy()
@@ -1179,6 +1207,7 @@ class YTDemucsApp:
     def exit_application(self):
         YTDemucsApp.close_master_window()
         YTDemucsApp.close_samples_window()
+        YTDemucsApp.stop_sample_player()
         for instance in list(YTDemucsApp.instances):
             instance.destroy_window()
         try:
@@ -1209,7 +1238,9 @@ class YTDemucsApp:
             existing.window.focus_force()
             return
 
-        YTDemucsApp.samples_window = SamplesWindow(self, self.sample_store)
+        YTDemucsApp.samples_window = SamplesWindow(
+            self, self.sample_store, self.sample_slots, YTDemucsApp.get_sample_player()
+        )
 
     def toggle_samples_window(self):
         existing = YTDemucsApp.samples_window
@@ -4332,17 +4363,23 @@ class MasterWindow:
 class SamplesWindow:
     SLOT_KEYS = ["Q", "W", "E", "A", "S", "D", "Z", "X", "C"]
 
-    def __init__(self, owner: YTDemucsApp, store: SampleStore):
+    def __init__(
+        self,
+        owner: YTDemucsApp,
+        store: SampleStore,
+        loaded_clips: dict[str, dict],
+        sample_player: SamplePlayer,
+    ):
         self.owner = owner
         self.store = store
         self.window = tk.Toplevel(owner.root)
         self.window.title("Samples")
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
-        self.sample_player = SamplePlayer()
+        self.sample_player = sample_player
+        self.loaded_clips = loaded_clips
         self.slot_title_vars: dict[str, tk.StringVar] = {}
         self.slot_remove_buttons: dict[str, ttk.Button] = {}
-        self.loaded_clips: dict[str, dict] = {}
 
         self.library_window: tk.Toplevel | None = None
         self.library_listbox: tk.Listbox | None = None
@@ -4397,15 +4434,35 @@ class SamplesWindow:
             self.window.bind(f"<{key.lower()}>", self.on_key_press)
             self.window.bind(f"<{key.upper()}>", self.on_key_press)
 
+        self.refresh_loaded_slots_ui()
         self.refresh_samples()
 
     def close(self):
-        self.sample_player.stop()
+        self.close_library()
         try:
             self.window.destroy()
         finally:
             if YTDemucsApp.samples_window is self:
                 YTDemucsApp.samples_window = None
+
+    def refresh_loaded_slots_ui(self):
+        for key in self.SLOT_KEYS:
+            self.update_slot_display(key)
+
+    def update_slot_display(self, slot_key: str):
+        title_var = self.slot_title_vars.get(slot_key)
+        remove_btn = self.slot_remove_buttons.get(slot_key)
+        if not title_var or not remove_btn:
+            return
+
+        clip = self.loaded_clips.get(slot_key)
+        if clip:
+            entry = clip.get("entry")
+            title_var.set(entry.session_title if entry else "Loaded")
+            remove_btn.grid()
+        else:
+            title_var.set("Empty")
+            remove_btn.grid_remove()
 
     def refresh_samples(self):
         self.store.reload_if_changed()
@@ -4527,27 +4584,17 @@ class SamplesWindow:
             "data": data,
             "sample_rate": sample_rate,
         }
-        title_var = self.slot_title_vars.get(slot_key)
-        if title_var:
-            title_var.set(entry.session_title)
-        remove_btn = self.slot_remove_buttons.get(slot_key)
-        if remove_btn:
-            remove_btn.grid()
+        self.update_slot_display(slot_key)
 
     def clear_slot(self, slot_key: str):
         self.loaded_clips.pop(slot_key, None)
-        title_var = self.slot_title_vars.get(slot_key)
-        if title_var:
-            title_var.set("Empty")
-        remove_btn = self.slot_remove_buttons.get(slot_key)
-        if remove_btn:
-            remove_btn.grid_remove()
+        self.update_slot_display(slot_key)
 
     def play_slot(self, slot_key: str):
         clip = self.loaded_clips.get(slot_key)
         if not clip:
             return
-        success = self.sample_player.play_clip(clip["data"], clip["sample_rate"])
+        success = YTDemucsApp.play_sample_slot(slot_key)
         if not success:
             messagebox.showerror("Samples", "Unable to play the selected sample.")
 

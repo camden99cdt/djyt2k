@@ -8,9 +8,7 @@ class SamplePlayer:
     def __init__(self):
         self.engine: PlaybackEngine | None = None
         self.sample_rate: int | None = None
-        self.data: np.ndarray = np.zeros(0, dtype="float32")
-        self.play_index = 0
-        self.is_playing = False
+        self.active_clips: list[dict] = []
 
     def _ensure_engine(self):
         if self.sample_rate is None:
@@ -27,36 +25,53 @@ class SamplePlayer:
             self.engine.start()
 
     def _pull_audio(self, frames: int) -> np.ndarray:
-        if not self.is_playing or self.sample_rate is None:
+        if not self.active_clips or self.sample_rate is None:
             return np.zeros(frames, dtype="float32")
 
-        if self.data.size == 0:
-            self.is_playing = False
-            return np.zeros(frames, dtype="float32")
+        buffer = np.zeros(frames, dtype="float32")
+        remaining: list[dict] = []
 
-        start = self.play_index
-        end = min(start + frames, self.data.size)
-        chunk = self.data[start:end]
-        self.play_index = end
+        for clip in self.active_clips:
+            data = clip["data"]
+            start = clip["index"]
+            end = min(start + frames, data.size)
+            chunk = data[start:end]
+            clip["index"] = end
 
-        if end >= self.data.size:
-            self.is_playing = False
+            if chunk.size < frames:
+                padded = np.zeros(frames, dtype="float32")
+                padded[: chunk.size] = chunk
+                chunk = padded
 
-        if chunk.size < frames:
-            padded = np.zeros(frames, dtype="float32")
-            padded[: chunk.size] = chunk
-            return padded
+            buffer[: chunk.size] += chunk
 
-        return chunk
+            if end < data.size:
+                remaining.append(clip)
+
+        self.active_clips = remaining
+        return buffer
+
+    @staticmethod
+    def _resample_to_match(data: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+        if data.size == 0 or source_rate == target_rate:
+            return data
+
+        duration = data.size / float(source_rate)
+        target_len = max(1, int(round(duration * target_rate)))
+        x_old = np.linspace(0.0, duration, num=data.size, endpoint=False)
+        x_new = np.linspace(0.0, duration, num=target_len, endpoint=False)
+        return np.interp(x_new, x_old, data).astype("float32")
 
     def play_clip(self, data: np.ndarray, sample_rate: int) -> bool:
         if data.size == 0 or sample_rate <= 0:
             return False
 
-        self.data = np.asarray(data, dtype="float32")
-        self.sample_rate = sample_rate
-        self.play_index = 0
-        self.is_playing = True
+        if self.sample_rate is None:
+            self.sample_rate = sample_rate
+        elif sample_rate != self.sample_rate:
+            data = self._resample_to_match(data, sample_rate, self.sample_rate)
+
+        self.active_clips.append({"data": np.asarray(data, dtype="float32"), "index": 0})
         self._ensure_engine()
         return self.engine is not None
 
@@ -71,8 +86,8 @@ class SamplePlayer:
         return self.play_clip(data, sr)
 
     def stop(self):
-        self.is_playing = False
-        self.play_index = 0
+        self.active_clips = []
         if self.engine is not None:
             self.engine.stop()
             self.engine = None
+        self.sample_rate = None
