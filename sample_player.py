@@ -10,6 +10,7 @@ class SamplePlayer:
         self.engine: PlaybackEngine | None = None
         self.sample_rate: int | None = None
         self.active_clips: list[dict] = []
+        self._clip_counter: int = 0
         self.volume: float = 1.0
         self.output_level: float = 0.0
         self.clipping: bool = False
@@ -40,18 +41,34 @@ class SamplePlayer:
         for clip in self.active_clips:
             data = clip["data"]
             start = clip["index"]
-            end = min(start + frames, data.size)
-            chunk = data[start:end]
-            clip["index"] = end
+            chunk = np.zeros(frames, dtype="float32")
+            write_cursor = 0
+            remaining_frames = frames
 
-            if chunk.size < frames:
-                padded = np.zeros(frames, dtype="float32")
-                padded[: chunk.size] = chunk
-                chunk = padded
+            while remaining_frames > 0:
+                if data.size == 0:
+                    break
+                end = min(start + remaining_frames, data.size)
+                piece = data[start:end]
+                take = piece.size
+                if take:
+                    chunk[write_cursor : write_cursor + take] = piece
+                    write_cursor += take
+                    remaining_frames -= take
+                start = end
 
+                if remaining_frames > 0:
+                    if clip.get("loop"):
+                        start = 0
+                    else:
+                        break
+
+            clip["index"] = start % data.size if data.size else 0
             buffer[: chunk.size] += chunk
 
-            if end < data.size:
+            if clip.get("loop") and data.size > 0:
+                remaining.append(clip)
+            elif write_cursor >= frames and start < data.size:
                 remaining.append(clip)
 
         self.active_clips = remaining
@@ -80,6 +97,19 @@ class SamplePlayer:
         return np.interp(x_new, x_old, data).astype("float32")
 
     def play_clip(self, data: np.ndarray, sample_rate: int) -> bool:
+        clip_id = f"anon_{self._clip_counter}"
+        self._clip_counter += 1
+        return self.start_clip(clip_id, data, sample_rate, start_index=0, loop=False)
+
+    def start_clip(
+        self,
+        clip_id: str,
+        data: np.ndarray,
+        sample_rate: int,
+        *,
+        start_index: int = 0,
+        loop: bool = False,
+    ) -> bool:
         if data.size == 0 or sample_rate <= 0:
             return False
 
@@ -88,7 +118,15 @@ class SamplePlayer:
         elif sample_rate != self.sample_rate:
             data = self._resample_to_match(data, sample_rate, self.sample_rate)
 
-        self.active_clips.append({"data": np.asarray(data, dtype="float32"), "index": 0})
+        start_index = int(max(0, min(start_index, max(0, data.size - 1)))) if data.size else 0
+        self.active_clips.append(
+            {
+                "id": clip_id,
+                "data": np.asarray(data, dtype="float32"),
+                "index": start_index,
+                "loop": bool(loop),
+            }
+        )
         self._ensure_engine()
         return self.engine is not None
 
@@ -113,6 +151,25 @@ class SamplePlayer:
 
     def is_clipping(self) -> bool:
         return self.clipping
+
+    def stop_clip(self, clip_id: str) -> int:
+        if not clip_id:
+            return -1
+        remaining: list[dict] = []
+        stopped_index = -1
+        for clip in self.active_clips:
+            if clip.get("id") == clip_id:
+                stopped_index = int(clip.get("index", -1))
+                continue
+            remaining.append(clip)
+        self.active_clips = remaining
+        if not self.active_clips and self.engine is not None:
+            try:
+                self.engine.stop()
+            finally:
+                self.engine = None
+                self.sample_rate = None
+        return stopped_index
 
     def stop(self):
         self.active_clips = []

@@ -49,6 +49,15 @@ class YTDemucsApp:
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
 
+    @classmethod
+    def _ensure_slot_defaults(cls, slot_key: str):
+        slot = cls.sample_slots.get((slot_key or "").upper())
+        if slot is None:
+            return
+        slot.setdefault("loop", False)
+        slot.setdefault("position", 0)
+        slot.setdefault("active_id", None)
+
     @staticmethod
     def _lighten_color(color: str, factor: float) -> str:
         """Return a lighter hex color by blending toward white."""
@@ -1148,11 +1157,58 @@ class YTDemucsApp:
 
     @classmethod
     def play_sample_slot(cls, slot_key: str) -> bool:
-        clip = cls.sample_slots.get((slot_key or "").upper())
+        slot_key = (slot_key or "").upper()
+        clip = cls.sample_slots.get(slot_key)
         if not clip:
             return False
+        cls._ensure_slot_defaults(slot_key)
         player = cls.get_sample_player()
+        if player is None:
+            return False
+
+        if clip.get("loop"):
+            active_id = clip.get("active_id")
+            if active_id:
+                cls.stop_sample_slot(slot_key)
+                return True
+            start_idx = int(clip.get("position") or 0)
+            clip_id = f"{slot_key}_{uuid.uuid4().hex}"
+            success = player.start_clip(
+                clip_id,
+                clip["data"],
+                clip["sample_rate"],
+                start_index=start_idx,
+                loop=True,
+            )
+            if success:
+                clip["active_id"] = clip_id
+            return success
+
+        clip["position"] = 0
+        clip["active_id"] = None
         return player.play_clip(clip["data"], clip["sample_rate"])
+
+    @classmethod
+    def stop_sample_slot(cls, slot_key: str):
+        slot_key = (slot_key or "").upper()
+        clip = cls.sample_slots.get(slot_key)
+        if not clip:
+            return
+        cls._ensure_slot_defaults(slot_key)
+        clip_id = clip.get("active_id")
+        if not clip_id:
+            return
+        player = cls.get_sample_player()
+        if player is None:
+            clip["active_id"] = None
+            return
+        try:
+            stopped_index = player.stop_clip(clip_id)
+        except Exception:
+            stopped_index = -1
+        if stopped_index >= 0:
+            clip["position"] = stopped_index
+        clip["active_id"] = None
 
     @classmethod
     def stop_sample_player(cls):
@@ -4465,6 +4521,8 @@ class SamplesWindow:
         self.loaded_clips = loaded_clips
         self.slot_title_vars: dict[str, tk.StringVar] = {}
         self.slot_remove_buttons: dict[str, ttk.Button] = {}
+        self.slot_loop_vars: dict[str, tk.BooleanVar] = {}
+        self.slot_loop_checks: dict[str, ttk.Checkbutton] = {}
 
         self.library_window: tk.Toplevel | None = None
         self.library_listbox: tk.Listbox | None = None
@@ -4485,7 +4543,7 @@ class SamplesWindow:
                 bd=2,
                 relief="ridge",
                 width=180,
-                height=110,
+                height=130,
                 background="#f7f7f7",
             )
             frame.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
@@ -4499,10 +4557,20 @@ class SamplesWindow:
             title_lbl = ttk.Label(frame, textvariable=title_var, wraplength=150, anchor="center")
             title_lbl.grid(row=1, column=0, sticky="nsew", pady=(8, 4))
 
+            loop_var = tk.BooleanVar(value=False)
+            loop_check = ttk.Checkbutton(
+                frame,
+                text="Loop",
+                variable=loop_var,
+                command=lambda k=key: self.on_loop_toggle(k),
+            )
+            loop_check.grid(row=2, column=0, pady=(0, 2))
+            loop_check.state(["disabled"])
+
             remove_btn = ttk.Button(
                 frame, text="Remove", command=lambda k=key: self.clear_slot(k)
             )
-            remove_btn.grid(row=2, column=0, pady=(4, 6))
+            remove_btn.grid(row=3, column=0, pady=(2, 6))
             remove_btn.grid_remove()
 
             for widget in (frame, letter_label, title_lbl):
@@ -4510,6 +4578,8 @@ class SamplesWindow:
 
             self.slot_title_vars[key] = title_var
             self.slot_remove_buttons[key] = remove_btn
+            self.slot_loop_vars[key] = loop_var
+            self.slot_loop_checks[key] = loop_check
 
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(0, weight=1)
@@ -4537,22 +4607,45 @@ class SamplesWindow:
     def update_slot_display(self, slot_key: str):
         title_var = self.slot_title_vars.get(slot_key)
         remove_btn = self.slot_remove_buttons.get(slot_key)
+        loop_var = self.slot_loop_vars.get(slot_key)
+        loop_check = self.slot_loop_checks.get(slot_key)
         if not title_var or not remove_btn:
             return
 
         clip = self.loaded_clips.get(slot_key)
         if clip:
+            YTDemucsApp._ensure_slot_defaults(slot_key)
+        if clip:
             entry = clip.get("entry")
             title_var.set(entry.session_title if entry else "Loaded")
             remove_btn.grid()
+            if loop_var:
+                loop_var.set(bool(clip.get("loop")))
+            if loop_check:
+                loop_check.state(["!disabled"])
         else:
             title_var.set("Empty")
             remove_btn.grid_remove()
+            if loop_var:
+                loop_var.set(False)
+            if loop_check:
+                loop_check.state(["disabled"])
 
     def refresh_samples(self):
         self.store.reload_if_changed()
         if self.library_window and self.library_window.winfo_exists():
             self.populate_library_list()
+
+    def on_loop_toggle(self, slot_key: str):
+        loop_var = self.slot_loop_vars.get(slot_key)
+        clip = self.loaded_clips.get(slot_key)
+        if loop_var is None or clip is None:
+            return
+        loop_enabled = bool(loop_var.get())
+        YTDemucsApp._ensure_slot_defaults(slot_key)
+        clip["loop"] = loop_enabled
+        if not loop_enabled:
+            YTDemucsApp.stop_sample_slot(slot_key)
 
     def on_key_press(self, event=None):
         if not event:
@@ -4664,14 +4757,20 @@ class SamplesWindow:
         if data.ndim > 1:
             data = data.mean(axis=1)
 
+        YTDemucsApp.stop_sample_slot(slot_key)
         self.loaded_clips[slot_key] = {
             "entry": entry,
             "data": data,
             "sample_rate": sample_rate,
+            "loop": False,
+            "position": 0,
+            "active_id": None,
         }
+        YTDemucsApp._ensure_slot_defaults(slot_key)
         self.update_slot_display(slot_key)
 
     def clear_slot(self, slot_key: str):
+        YTDemucsApp.stop_sample_slot(slot_key)
         self.loaded_clips.pop(slot_key, None)
         self.update_slot_display(slot_key)
 
