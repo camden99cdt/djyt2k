@@ -1157,11 +1157,11 @@ class YTDemucsApp:
     @classmethod
     def stop_sample_player(cls):
         if cls.sample_player is not None:
-        try:
-            cls.sample_player.stop()
-        except Exception:
-            pass
-        cls.sample_player = None
+            try:
+                cls.sample_player.stop()
+            except Exception:
+                pass
+            cls.sample_player = None
 
     @classmethod
     def set_sample_volume(cls, volume: float):
