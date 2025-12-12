@@ -1146,6 +1146,41 @@ class YTDemucsApp:
         YTDemucsApp.sample_hotkeys_bound = True
 
     @classmethod
+    def _get_active_sample_clip_ids(cls) -> set[str]:
+        player = cls.sample_player
+        if player is None:
+            return set()
+        try:
+            return set(player.get_active_clip_ids())
+        except Exception:
+            return set()
+
+    @classmethod
+    def refresh_sample_play_states(cls) -> set[str]:
+        active_ids = cls._get_active_sample_clip_ids()
+        positions: dict[str, int] = {}
+        player = cls.sample_player
+        if player is not None:
+            try:
+                positions = player.get_active_clip_positions()
+            except Exception:
+                positions = {}
+
+        for slot_key, clip in cls.sample_slots.items():
+            cls._ensure_slot_defaults(slot_key)
+            active_id = clip.get("active_id")
+            if not active_id:
+                continue
+            if active_id not in active_ids:
+                clip["active_id"] = None
+                if not clip.get("loop"):
+                    clip["position"] = 0
+                continue
+            if active_id in positions:
+                clip["position"] = positions[active_id]
+        return active_ids
+
+    @classmethod
     def get_sample_player(cls) -> SamplePlayer:
         if cls.sample_player is None:
             cls.sample_player = SamplePlayer()
@@ -1185,8 +1220,16 @@ class YTDemucsApp:
             return success
 
         clip["position"] = 0
-        clip["active_id"] = None
-        return player.play_clip(clip["data"], clip["sample_rate"])
+        clip_id = f"{slot_key}_{uuid.uuid4().hex}"
+        success = player.start_clip(
+            clip_id,
+            clip["data"],
+            clip["sample_rate"],
+            start_index=0,
+            loop=False,
+        )
+        clip["active_id"] = clip_id if success else None
+        return success
 
     @classmethod
     def stop_sample_slot(cls, slot_key: str):
@@ -3693,6 +3736,7 @@ class YTDemucsApp:
     def update_playback_ui(self):
         try:
             self.player.apply_pending_tempo_pitch()
+            YTDemucsApp.refresh_sample_play_states()
 
             # Always get the true duration from the audio engine
             duration = self.player.get_duration()
@@ -4523,6 +4567,7 @@ class SamplesWindow:
         self.slot_remove_buttons: dict[str, ttk.Button] = {}
         self.slot_loop_vars: dict[str, tk.BooleanVar] = {}
         self.slot_loop_checks: dict[str, ttk.Checkbutton] = {}
+        self.slot_play_icons: dict[str, ttk.Label] = {}
 
         self.library_window: tk.Toplevel | None = None
         self.library_listbox: tk.Listbox | None = None
@@ -4549,13 +4594,18 @@ class SamplesWindow:
             frame.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
             frame.grid_propagate(False)
             frame.columnconfigure(0, weight=1)
+            frame.columnconfigure(1, weight=0)
 
             letter_label = ttk.Label(frame, text=key, font=("TkDefaultFont", 16, "bold"))
             letter_label.grid(row=0, column=0, sticky="w", padx=(6, 0), pady=(4, 0))
 
+            play_icon = ttk.Label(frame, text="▶", foreground="#2e8b57")
+            play_icon.grid(row=0, column=1, sticky="ne", padx=(0, 6), pady=(4, 0))
+            play_icon.grid_remove()
+
             title_var = tk.StringVar(value="Empty")
             title_lbl = ttk.Label(frame, textvariable=title_var, wraplength=150, anchor="center")
-            title_lbl.grid(row=1, column=0, sticky="nsew", pady=(8, 4))
+            title_lbl.grid(row=1, column=0, sticky="nsew", pady=(8, 4), columnspan=2)
 
             loop_var = tk.BooleanVar(value=False)
             loop_check = ttk.Checkbutton(
@@ -4580,6 +4630,7 @@ class SamplesWindow:
             self.slot_remove_buttons[key] = remove_btn
             self.slot_loop_vars[key] = loop_var
             self.slot_loop_checks[key] = loop_check
+            self.slot_play_icons[key] = play_icon
 
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(0, weight=1)
@@ -4591,6 +4642,7 @@ class SamplesWindow:
 
         self.refresh_loaded_slots_ui()
         self.refresh_samples()
+        self.window.after(150, self.poll_playback_state)
 
     def close(self):
         self.close_library()
@@ -4631,10 +4683,33 @@ class SamplesWindow:
             if loop_check:
                 loop_check.state(["disabled"])
 
+        self.update_slot_indicator(slot_key)
+
+    def update_slot_indicator(self, slot_key: str, active_ids: set[str] | None = None):
+        icon = self.slot_play_icons.get(slot_key)
+        if not icon:
+            return
+        if active_ids is None:
+            active_ids = YTDemucsApp.refresh_sample_play_states()
+        clip = self.loaded_clips.get(slot_key)
+        is_playing = bool(clip and clip.get("active_id") in active_ids)
+        if is_playing:
+            icon.grid()
+        else:
+            icon.grid_remove()
+
     def refresh_samples(self):
         self.store.reload_if_changed()
         if self.library_window and self.library_window.winfo_exists():
             self.populate_library_list()
+
+    def poll_playback_state(self):
+        if not self.window or not self.window.winfo_exists():
+            return
+        active_ids = YTDemucsApp.refresh_sample_play_states()
+        for key in self.SLOT_KEYS:
+            self.update_slot_indicator(key, active_ids)
+        self.window.after(150, self.poll_playback_state)
 
     def on_loop_toggle(self, slot_key: str):
         loop_var = self.slot_loop_vars.get(slot_key)

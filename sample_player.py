@@ -152,6 +152,25 @@ class SamplePlayer:
     def is_clipping(self) -> bool:
         return self.clipping
 
+    def get_active_clip_ids(self) -> set[str]:
+        return {
+            clip_id
+            for clip_id in (clip.get("id") for clip in self.active_clips)
+            if clip_id
+        }
+
+    def get_active_clip_positions(self) -> dict[str, int]:
+        positions: dict[str, int] = {}
+        for clip in self.active_clips:
+            clip_id = clip.get("id")
+            if not clip_id:
+                continue
+            try:
+                positions[clip_id] = int(clip.get("index", 0))
+            except Exception:
+                positions[clip_id] = 0
+        return positions
+
     def stop_clip(self, clip_id: str) -> int:
         if not clip_id:
             return -1
