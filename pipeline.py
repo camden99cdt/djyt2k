@@ -1,12 +1,19 @@
-"""Pipeline orchestration for download, separation, and key detection."""
+"""Pipeline orchestration for download, separation, and key detection.
+
+This module also exposes a process-based worker that isolates the heavy
+pipeline from the GUI and audio threads.
+"""
 from __future__ import annotations
 
 import os
+import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Optional
+from multiprocessing import Process, Queue, get_context
+from queue import Empty
+from typing import Any, Callable, Optional
 
 import demucs_runner
 import downloader
@@ -30,6 +37,14 @@ class PipelineResult:
     @property
     def separated(self) -> bool:
         return self.stems_dir is not None
+
+
+@dataclass
+class PipelineMessage:
+    """Cross-process messages emitted by the pipeline worker."""
+
+    kind: str
+    payload: Any = None
 
 
 class PipelineRunner:
@@ -132,3 +147,68 @@ class PipelineRunner:
         session_dir = os.path.join(base_cache, f"session_{timestamp}_{unique_id}")
         os.makedirs(session_dir, exist_ok=True)
         return session_dir
+
+
+def _run_pipeline_subprocess(
+    url: str,
+    skip_separation: bool,
+    cache_dir_factory: Optional[Callable[[], str]],
+    queue: Queue,
+):
+    """Entry point for executing the pipeline inside a worker process."""
+
+    runner = PipelineRunner(
+        log_callback=lambda message: queue.put(PipelineMessage("log", message)),
+        status_callback=lambda status: queue.put(PipelineMessage("status", status)),
+        cache_dir_factory=cache_dir_factory,
+    )
+
+    try:
+        result = runner.process(url, skip_separation)
+        queue.put(PipelineMessage("result", result))
+    except Exception:
+        queue.put(PipelineMessage("error", traceback.format_exc()))
+    finally:
+        queue.put(PipelineMessage("complete"))
+
+
+class PipelineProcessWorker:
+    """Runs the pipeline in an isolated background process.
+
+    Logs, status updates, and results are emitted via a queue so callers can
+    update the GUI thread without blocking it or the audio callback.
+    """
+
+    def __init__(self, cache_dir_factory: Optional[Callable[[], str]] = None):
+        self.cache_dir_factory = cache_dir_factory
+        self.process: Process | None = None
+        self.queue: Queue | None = None
+
+    def start(self, url: str, skip_separation: bool):
+        if self.process and self.process.is_alive():
+            raise RuntimeError("Pipeline worker already running")
+
+        ctx = get_context("spawn")
+        self.queue = ctx.Queue()
+        self.process = ctx.Process(
+            target=_run_pipeline_subprocess,
+            args=(url, skip_separation, self.cache_dir_factory, self.queue),
+            daemon=True,
+        )
+        self.process.start()
+
+    def poll_messages(self) -> list[PipelineMessage]:
+        if not self.queue:
+            return []
+
+        messages: list[PipelineMessage] = []
+        while True:
+            try:
+                messages.append(self.queue.get_nowait())
+            except Empty:
+                break
+        return messages
+
+    def join(self, timeout: Optional[float] = None):
+        if self.process:
+            self.process.join(timeout=timeout)
