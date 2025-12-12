@@ -2830,7 +2830,11 @@ class YTDemucsApp:
         session = self.player.session
         sample_rate = session.sample_rate
         loop_bounds = self.player.loop_controller.get_bounds_samples(session.total_samples)
-        audio_data = session.current_mix_data or session.original_mix
+        audio_data = (
+            session.current_mix_data
+            if session.current_mix_data is not None
+            else session.original_mix
+        )
 
         if sample_rate is None or audio_data is None:
             messagebox.showerror("Clip", "No mix available to clip.")
