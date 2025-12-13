@@ -1068,6 +1068,52 @@ class AudioSession:
 
         return self._apply_frequency_filters(dry_mix)
 
+    def get_selection_slice(self, start: int, end: int) -> np.ndarray:
+        """
+        Build a mono slice representing the *current* playback selection
+        between the given sample bounds.
+
+        This mirrors the selection logic used by `get_chunk` but avoids
+        mutating reverb/filter state so it can be safely called for
+        offline tasks like clipping.
+        """
+
+        if self.sample_rate is None or self.total_samples <= 0:
+            return np.zeros(0, dtype="float32")
+
+        start = max(0, min(int(start), self.total_samples))
+        end = max(start, min(int(end), self.total_samples))
+        length = end - start
+        if length <= 0:
+            return np.zeros(0, dtype="float32")
+
+        dry_mix = np.zeros(length, dtype="float32")
+        played_any = False
+
+        if self.play_all and self.current_mix_data is not None:
+            segment = self.current_mix_data[start:end]
+            if segment.size > 0:
+                dry_mix[: segment.size] += segment
+                played_any = True
+        else:
+            for name in list(self.active_stems):
+                data = self.current_stem_data.get(name)
+                if data is None:
+                    continue
+                segment = data[start:end]
+                if segment.size == 0:
+                    continue
+                dry_mix[: segment.size] += segment
+                played_any = True
+
+        if (not played_any) and self.current_mix_data is not None:
+            segment = self.current_mix_data[start:end]
+            if segment.size > 0:
+                dry_mix[: segment.size] += segment
+
+        np.clip(dry_mix, -1.0, 1.0, out=dry_mix)
+        return dry_mix
+
     # -------------------------------------------------------------------------
     # DURATION
     # -------------------------------------------------------------------------
