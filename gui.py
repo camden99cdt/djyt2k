@@ -46,6 +46,7 @@ class YTDemucsApp:
     sample_slots: dict[str, dict] = {}
     sample_player: SamplePlayer | None = None
     sample_volume: float = 1.0
+    primary_root: tk.Tk | None = None
     METER_FLOOR_DB = -50.0
     METER_WARN_DB = -16.0
 
@@ -75,6 +76,8 @@ class YTDemucsApp:
 
     def __init__(self, root: tk.Tk):
         self.root = root
+        if isinstance(root, tk.Tk) and YTDemucsApp.primary_root is None:
+            YTDemucsApp.primary_root = root
         self.base_title = "YouTube \u2192 Demucs Stems"
         self.root.title(self.base_title)
 
@@ -1309,13 +1312,15 @@ class YTDemucsApp:
 
     def close_window(self, event=None):
         self.destroy_window()
-        if not YTDemucsApp.instances:
-            try:
-                self.root.quit()
-            except Exception:
-                pass
 
     def destroy_window(self):
+        is_primary_root = (
+            isinstance(self.root, tk.Tk)
+            and YTDemucsApp.primary_root is not None
+            and self.root == YTDemucsApp.primary_root
+        )
+        multiple_instances = len(YTDemucsApp.instances) > 1
+
         try:
             self.player.stop()
             self.player.stop_stream()
@@ -1335,8 +1340,26 @@ class YTDemucsApp:
             YTDemucsApp.close_samples_window()
             YTDemucsApp.stop_sample_player()
 
-        if self.root.winfo_exists():
+        if is_primary_root and multiple_instances:
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
+        elif self.root.winfo_exists():
             self.root.destroy()
+
+        if not YTDemucsApp.instances:
+            primary_root = YTDemucsApp.primary_root or self.root
+            try:
+                primary_root.quit()
+            except Exception:
+                pass
+            try:
+                if primary_root.winfo_exists():
+                    primary_root.destroy()
+            except Exception:
+                pass
+            YTDemucsApp.primary_root = None
 
     def exit_application(self):
         YTDemucsApp.close_master_window()
